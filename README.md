@@ -1,112 +1,157 @@
-# RealPrice 🏠
+# Real-Price
 
-חוזה מחירי נדל"ן בישראל בעזרת למידת מכונה: מנקה עסקאות, ממפה כל עסקה לקואורדינטות (גוש/חלקה → lat/long),
-מעשיר במרחקים למוסדות לימוד ולתחבורה ציבורית, מאמן מודל, ומייצא אותו לאתר סטטי (ללא שרת) עם מפה והערכת מחיר.
+**Estimate the market price of a property in Israel, entirely in your browser.**
 
-## הרצה מהירה
+Live site: https://beericohen.github.io/Real-Price/
+
+
+You locate a property by **gush / chelka** (block / parcel) or by address, enter its area, rooms, year built and
+type, and a gradient-boosted tree model trained on **~1.7 million real Israeli deals** returns an estimated price
+and range. There is no server and no backend: the trained trees are exported to JavaScript and run on the
+visitor's device.
+
+## What the site shows
+
+- **Estimated price** with a likely range (the model's 10th-90th percentile)
+- **Location picker** - gush / chelka / sub-chelka, free-text address, or a click on the map
+- **Surroundings** - distance to the nearest school and public-transport stop, and to central Tel Aviv
+- **Deal score** - compare an asking price with the estimate (Buying / Selling modes)
+- **Market position** - how the property's price per m² ranks against the same property at ~48 spots within 3 km,
+  plus a price-vs-area and price-vs-year-built curve drawn by the model
+- **The same property, elsewhere** - the model's estimate 1.5 km away in each of 8 directions
+- **Why this price?** - a "receipt" starting from a typical Tel Aviv flat and swapping in your location, area,
+  rooms, year built and type one at a time; the rows add up exactly to the prediction
+- **What-if simulator** - change area, rooms or year built and re-run the model instantly
+- **Model facts** - accuracy metrics, factor importance and the model structure
+
+> The market-position, curve and "elsewhere" views are **model outputs**, not real deals - the site ships the
+> trained model, not the deal table. They are labelled as such on the page.
+
+## How it works
+
+```
+Deal files (one ZIP per settlement, 51 files)
+        |  clean_data         drop unused columns, empty / zero rows, outliers
+        v
+  clean deals
+        |  geocode            gush / chelka / sub-chelka -> ITM -> lat / long (data.gov.il)
+        |  add_features       distance to nearest school and public transport, counts nearby, age, price per m²
+        v
+  model table
+        |  eda                graphs  ->  reports/eda/
+        |  preprocess         one-hot encoding of deal nature, log(price per m²) target
+        v
+  numeric table
+        |  train              gradient-boosted trees: median + 10th + 90th percentile models
+        v
+  trained models
+        |  export_model       trees, POI and parcel lookups as JavaScript files
+        v
+  website/data/*.js   ->   read by the website (website/js/)
+```
+
+### Model results (held-out deals)
+
+| Metric | Value |
+|---|---|
+| R² on price | 0.9022 |
+| R² on log price | 0.9250 |
+| MAE (average error) | ₪169,020 |
+| RMSE | ₪290,501 |
+| Median absolute % error | 9.2% |
+| Within 10% of the real price | 53.6% |
+| Within 20% of the real price | 82.0% |
+| Coverage of the 10-90% range | 79.0% (target 80%) |
+
+The final model has **800 trees** for the median and the same structure for each percentile model, trained on
+**1,634,870 deals** (trained 2026-11-26).
+
+### Design choices
+
+- **Predict log(price per m²).** A ₪100k error matters far more on a ₪1M flat than on a ₪5M villa. Training on the
+  log of the price per square metre makes the model care about percentage error, and multiplying by the area
+  turns the prediction back into a price.
+- **Quantile models for the range.** Two extra models predict the 10th and 90th percentile, so the range widens
+  where the market is less predictable instead of using a fixed ± error.
+- **Location as coordinates plus context.** Latitude / longitude, distance from central Tel Aviv, distance to the
+  nearest school and public transport, and how many of each are nearby.
+- **Time as a feature.** Deal year / month / day and a continuous time index let the model follow market trends.
+- **Exact receipt.** The "Why this price?" rows come from re-running the model with one factor changed at a time,
+  not from an approximation.
+
+## Exploratory data analysis (EDA)
+
+All graphs are in [`reports/eda/`](reports/eda/) (open [`reports/eda/index.html`](reports/eda/index.html) to see
+them on one page).
+
+| Graph | What it shows |
+|---|---|
+| `01_price_distribution.png` | Deal prices are right-skewed |
+| `02_price_per_sqm_distribution.png` | Distribution of price per m² |
+| `03_area_vs_price.png` | Larger properties cost more |
+| `04_rooms_boxplot.png` | Price by number of rooms |
+| `05_age_vs_price_per_sqm.png` | How building age affects price per m² |
+| `06_market_over_time.png` | Market trend over time |
+| `07_deal_nature.png` | Deals by property type |
+| `08_correlation_heatmap.png` | Correlations between features |
+| `09_map_price_per_sqm.png` | Price per m² on the map |
+| `10_distance_effects.png` | Effect of distance to schools, transport and the centre |
+| `11_top_gush.png` | The most expensive / most active gush areas |
+
+## Project structure
+
+```
+Real-Price/
+├── website/                   the website (static)
+│   ├── index.html             the page (English)
+│   ├── predict.html           redirects to index.html#valuation
+│   ├── icon.png
+│   ├── css/style.css          styling (dark / light theme)
+│   ├── js/common.js           formatting, map helpers, parcel + geocoding lookups
+│   ├── js/picker.js           gush / chelka / address picker
+│   ├── js/predictor.js        feature vector + tree evaluation (runs the model in the browser)
+│   ├── js/chart.js            SVG price-curve chart
+│   ├── js/app.js              page logic (form, results, receipt, what-if, stats)
+│   └── data/                  meta.js, poi.js, model.js, parcels_*.js (created by the export step)
+├── src/                       the Python pipeline (one file per step + main.py)
+├── data/                      raw deal files, cleaned deals, model table
+├── models/                    trained models and their metrics
+└── reports/eda/               EDA images + index.html
+```
+
+The shipped data: **1,698,771** deals, **1,095,973** mapped parcels, **22,705** schools and **34,307**
+public-transport stops (about 31 MB of JavaScript data files; parcels are split into chunks and loaded on demand).
+
+## Run it locally
+
+**The website** - any static server works (opening `index.html` directly will not load the data files):
+
+```bash
+cd website
+python -m http.server 8000
+# open http://localhost:8000
+```
+
+The page loads Leaflet from unpkg, map tiles from ArcGIS and address search from OpenStreetMap Nominatim, so it
+needs an internet connection for the map and address lookup. Gush / chelka lookup and the estimate itself work
+from the local data files.
+
+**Retrain the model:**
 
 ```bash
 pip install -r requirements.txt
-python main.py --demo        # בדיקת מערכת על נתונים סינתטיים (לא נתוני אמת!), כ-30 שניות
+python src/main.py
 ```
 
-עם הנתונים האמיתיים:
+This runs the whole pipeline and overwrites the graphs, the trained models and `website/data/`.
 
-1. העתיקו את 51 קבצי העסקאות (או את ה-ZIP כמו שהוא) לתיקייה `data/raw/`.
-2. הוסיפו את שכבת החלקות (ראו "נתונים חיצוניים" למטה) ל-`data/external/parcels.csv` (או `.geojson`).
-3. `python main.py`
-4. פתחו את `website/index.html` בדפדפן (או העלו את תיקיית `website/` ל-GitHub Pages / Netlify).
+## Limitations
 
-```bash
-python main.py --from-step training   # המשך משלב מסוים
-python main.py --only eda             # שלב בודד
-python main.py --skip-eda             # בלי הגרפים
-```
-
-## מבנה הפרויקט
-
-| קובץ | תפקיד |
-|---|---|
-| `main.py` | מריץ את כל השלבים לפי הסדר (לשימוש כשהמידע משתנה) |
-| `realprice/config.py` | כל ההגדרות במקום אחד: נתיבים, גבולות ניקוי, מקורות נתונים, היפר-פרמטרים |
-| `realprice/cleaning.py` | **1. ניקוי** |
-| `realprice/enrichment.py` | **שלב ביניים:** קואורדינטות + מרחקים (+ `external_data.py`, `geo.py`) |
-| `realprice/eda.py` | **2. EDA** – 11 גרפים + סטטיסטיקות ל-`reports/eda/` |
-| `realprice/preprocessing.py` | **3. עיבוד מקדים** – one-hot, log(price), פיצול train/test |
-| `realprice/training.py` | **4. אימון** – השוואת מודלים, כוונון, הערכה |
-| `realprice/exporting.py` | **5. ייצוא** – המודל כקובץ `website/data/model.js` |
-| `realprice/build_website.py` | **6. אתר** – קבצי הנתונים של האתר (בתי ספר, תחבורה, חלקות) |
-| `website/` | האתר הסטטי: `index.html` (איתור + סביבה), `predict.html` (הערכת מחיר) |
-| `realprice/demo_data.py` | מחולל נתונים סינתטיים ל-`--demo` |
-
-## מה כל שלב עושה
-
-**ניקוי.** מאחד את כל הקבצים; מסיר `settlement_code, settlement, portion, scraped_at`; מסיר שורות עם ערך ריק;
-שורות עם 0 ב-`gush, chelka, deal_amount, declared_amount, year_built, asset_area, room_num`
-(`sub_chelka` לא נכלל כי `000` הוא ערך תקין); כפילויות; ערכים לא סבירים (גבולות ב-`config.py`);
-ולבסוף **outliers סטטיסטיים**: z-score חזק (חציון/MAD) על log(מחיר למ"ר) *בתוך כל גוש*, ובגושים קטנים לעומת כלל הנתונים.
-הלוג מדפיס כמה שורות כל כלל הסיר.
-
-**העשרה.** `(גוש, חלקה)` → מרכז החלקה בקואורדינטות ITM → lat/long (ההמרה ממומשת ב-`geo.py` בלי תלות ב-pyproj).
-המרחק לבית הספר ולתחנה הקרובה נמדד **במטרים** ב-ITM עם KD-tree (`scipy.cKDTree`), פעם אחת לכל חלקה ייחודית ולא לכל עסקה.
-פיצ'רים נוספים שהוספתי: מספר בתי ספר ברדיוס 1 ק"מ, מספר תחנות ברדיוס 500 מ', מרחק ממרכז תל אביב.
-העמודות הסופיות (`data/processed/dataset.csv`) הן בדיוק אלה שביקשת, ועוד שלוש העמודות הנוספות.
-
-**עיבוד מקדים.** one-hot ל-`deal_nature` (ערכים נדירים מאוד → `other`), יעד = `log(deal_amount)` כך שהטעות היא יחסית,
-ופיצ'רים נגזרים (`area_per_room`, ציר זמן רציף `deal_t`). `price_per_sqrm` **לא** נכנס כפיצ'ר (הוא נגזר מהיעד – דליפה).
-גוש/חלקה/תת-חלקה הם מזהים ולא פיצ'רים; המיקום נכנס דרך lat/long.
-
-**אימון.** משווה Ridge, RandomForest ו-HistGradientBoosting מכוונן (חיפוש אקראי), ושומר את ההשוואה ב-`reports/training/model_comparison.csv`.
-המודל שנבחר הוא gradient boosting: הוא הכי מדויק בדרך כלל על נתונים טבלאיים, מהיר גם על מיליוני שורות, וניתן לייצוא לדפדפן.
-בנוסף מאומנים שני מודלי quantile (10% ו-90%) שנותנים **טווח מחיר** ולא רק מספר. ההערכה נעשית על 15% נתונים שהמודל לא ראה
-(`reports/metrics.json`), ואז המודל מאומן מחדש על כל הנתונים.
-
-**ייצוא ואתר.** העצים מיוצאים למערכים שטוחים; האתר מחשב תחזית ב-JavaScript בלבד.
-הייצוא נבדק אוטומטית מול התחזיות של scikit-learn לפני הכתיבה. קבצי הנתונים הם `.js` ולא `.json` כדי שהאתר יעבוד גם בפתיחה ישירה מהדיסק.
-חלקות נטענות לפי טווח גושים (רק מה שצריך), ובדפדפן החיפוש הוא חיפוש בינארי + אינדקס רשת למציאת הנקודה הקרובה.
-
-## נתונים חיצוניים (data.gov.il)
-
-סדר ההכרעה לכל מקור: קובץ מקומי `data/external/<name>.*` ← `url` ← `ckan_resource_id` (מוגדרים ב-`config.py → EXTERNAL_SOURCES`).
-
-| מקור | מה צריך | איך |
-|---|---|---|
-| `parcels` | עמודות גוש + חלקה + קואורדינטות (X/Y ב-ITM או lat/lon), או GeoJSON של פוליגונים | הורידו משכבת החלקות של מדידות ישראל / data.gov.il ושמרו כ-`data/external/parcels.csv` או `.geojson` |
-| `schools` | מוסדות חינוך (משרד החינוך) | יורד אוטומטית מ-data.gov.il (resource id מוגדר ב-config) |
-| `transit` | GTFS של משרד התחבורה (`stops.txt`) | מוגדר כבר כ-URL ויורד אוטומטית |
-
-לחיפוש משאבים ב-data.gov.il ולקבלת ה-resource id:
-
-```bash
-python -m realprice.external_data search "חלקות"
-python -m realprice.external_data search "מוסדות חינוך"
-```
-
-הקוד מזהה אוטומטית שמות עמודות נפוצים (עברית/אנגלית, ITM או WGS84). אם בקובץ שלכם השמות שונים – הוסיפו אותם ל-`COLUMN_ALIASES`.
-מקורות שמוגדרים עם URL או resource id יורדים אוטומטית בהרצה הראשונה ונשמרים ב-`data/external/`; כדי להוריד מחדש בכל הרצה הגדירו `REFRESH_EXTERNAL = True` ב-`config.py`.
-**חשוב:** ה-URL/מזהה המשאב של שכבת החלקות לא אומת מול data.gov.il בזמן הכתיבה (לא הייתה גישה לאינטרנט), לכן הם ריקים ב-config.
-
-## הערות ומגבלות
-
-- **תת-חלקה:** שכבות החלקות הציבוריות נותנות מיקום ברמת חלקה, לכן תת-חלקה נשמרת בדאטהסט אך לא משנה את המיקום.
-- **גוש בלי חלקה:** עסקאות שהחלקה שלהן חסרה בשכבה מקבלות את מרכז הגוש (`ALLOW_GUSH_FALLBACK`; כבו אותו אם רוצים רק התאמות מדויקות).
-- **`age`** מחושב לפי השנה הנוכחית, כפי שהוגדר. המודל מקבל גם `deal_year` ולכן יודע להתאים למחירים לאורך זמן.
-- המודל מחזיר **הערכה סטטיסטית** שמבוססת על מחירי עבר; הוא לא רואה מצב פנימי, קומה, חניה, מרפסת וכד' (אין בנתונים).
-- חיפוש כתובת באתר משתמש ב-OpenStreetMap Nominatim (שירות ציבורי עם מגבלות שימוש) והמפה טוענת אריחים מהאינטרנט.
-- אם הנתונים גדולים מאוד, `model.js` יכול להגיע לכמה עשרות MB; הקטינו `MAX_BOOST_ITER` או `max_leaf_nodes` ב-`config.py` / `training.py`.
-- בגרפי ה-EDA טקסט בעברית עלול להופיע הפוך/כמרובעים אם הגופן לא תומך.
-
-## שדרוג דיוק (גרסת Ensemble, ללא דליפת מידע)
-
-- **סדר פעולות:** קודם split, ורק אז כל סטטיסטיקה (אחוזונים, KMeans, אגרגציות גוש, Target Encoding, עסקאות השוואה) – מחושבת על ה-train בלבד (`realprice/features.py`).
-- **ניקוי:** `portion == 1` בלבד; רשימת סוגי נכס למגורים בלבד (`RESIDENTIAL_NATURES`); `year_built` 0/1900 מוסר; חיתוך אחוזון 1%/99% של מחיר למ"ר ושטח לפי ה-train.
-- **יעד:** `log(price_per_sqrm)`; ההערכה על המחיר הכולל: `exp(pred) * asset_area`.
-- **פיצ'רים:** Target Encoding היררכי (אשכול → גוש → גוש+חלקה) Out-of-Fold עם החלקה; אגרגציות גוש; מגמת מחיר של 3 חודשים קודמים (לפי אשכול, גיבוי ארצי); עסקאות קרובות מהעבר בלבד (5/15/50 שכנים; 250/500/1000 מ'; מרחק לקרובה); קואורדינטות מסובבות; 50 אשכולות; `is_new_build`.
-- **מודלים:** HistGradientBoosting (min_samples_leaf=20, l2=2, lr=0.03, categorical native) + CatBoost + LightGBM, ממוצע משוקלל לפי NNLS על ולידציה. טבלת ההשוואה: `reports/training/model_comparison.csv`.
-- **האתר:** אינו יכול לחשב עסקאות שכנות בדפדפן, ולכן מיוצא מודל HGB נפרד ("web") על פיצ'רים שהדפדפן מחשב. המודל המלא (`models/realprice_model.joblib`) לשימוש בפייתון.
-
-## שנת בנייה לא ידועה / שמות בתי ספר / אבחון גוש
-
-- **שנת בנייה אופציונלית:** ערכי 0/1900 הופכים ל-NaN (העסקה נשמרת). 30% משורות ה-train מוסתרות בשנה כדי שהמודלים ילמדו גם בלי שנה; טבלת `model_comparison.csv` כוללת שורות "year_built UNKNOWN". באתר שדה השנה לא חובה.
-- **שמות בתי ספר:** זיהוי עמודת השם תוקן (`shem_mosad`) ויש זיהוי חלופי; הלוג מדפיס איזו עמודה נבחרה.
-- **גוש "לא נמצא":** `python -m realprice.diagnose_gush <גוש> [חלקה]` מראה באיזה שלב הגוש הולך לאיבוד.
+- Estimates are statistical, not professional appraisals. The model does not know the property's condition,
+  floor, parking, view, renovations or the buyer / seller situation.
+- Deals are reported transaction prices; the model has no information about the future of the market.
+- Coverage is uneven: densely populated areas have far more deals than rural ones, so estimates there are
+  less reliable. The "reliability" meter on the site is a heuristic (range width and location precision), not
+  a statistical confidence interval.
+- Gush / chelka lookup depends on the parcel data; if a chelka is missing the centre of the gush is used and the
+  location is marked as approximate.
