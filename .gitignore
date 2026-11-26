@@ -1,0 +1,8 @@
+__pycache__/
+demo_workspace/
+data/processed/
+data/external/*
+data/raw/*
+models/*
+!**/.gitkeep
+catboost_info/*
