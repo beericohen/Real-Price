@@ -1,51 +1,107 @@
-/* Price-curve chart (plain SVG): the model's price for the user's property while one parameter sweeps; the user's value is highlighted. */
+/* The price-curve chart, drawn as plain SVG (no chart library).
+   It shows the model's price for the user's property while ONE parameter (area or year built) is changed,
+   with the 10%-90% range as a band and the user's own value highlighted. */
 (function () {
-  const NS = "http://www.w3.org/2000/svg", W = 900, H = 460, P = { t: 24, r: 28, b: 52, l: 74 };
-  const E = (tag, a = {}) => { const n = document.createElementNS(NS, tag); Object.entries(a).forEach(([k, v]) => n.setAttribute(k, v)); return n; };
-  const short = (n) => "₪" + (n >= 1e6 ? (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + "M" : Math.round(n / 1000) + "K");
+  const SVG_NS = "http://www.w3.org/2000/svg";
+  const WIDTH = 900;
+  const HEIGHT = 460;
+  const PAD = { top: 24, right: 28, bottom: 52, left: 74 }; // room for the axis labels
+  const X_AXIS_TITLES = { area: "שטח (מ״ר)", year: "שנת בנייה" };
+
+  /** Creates an SVG element with the given attributes. */
+  function svgElement(tag, attributes = {}) {
+    const element = document.createElementNS(SVG_NS, tag);
+    for (const [name, value] of Object.entries(attributes)) element.setAttribute(name, value);
+    return element;
+  }
+
+  function svgText(text, attributes) {
+    const element = svgElement("text", attributes);
+    element.textContent = text;
+    return element;
+  }
+
+  /** 3,250,000 -> "₪3.3M", 450,000 -> "₪450K" (short labels for the y axis). */
+  function shortMoney(n) {
+    if (n >= 1e6) return "₪" + (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + "M";
+    return "₪" + Math.round(n / 1000) + "K";
+  }
 
   class CurveChart {
-    constructor(svg) { this.svg = svg; this.axis = "area"; this.data = null; svg.setAttribute("viewBox", `0 0 ${W} ${H}`); this.render(); }
-    setAxis(a) { this.axis = a; this.render(); }
-    setData(d) { this.data = d; this.render(); }
+    constructor(svg) {
+      this.svg = svg;
+      this.axis = "area"; // which curve is shown: "area" or "year"
+      this.data = null; // {area: {pts, you}, year: {pts, you}}, set by setData()
+      svg.setAttribute("viewBox", `0 0 ${WIDTH} ${HEIGHT}`);
+      this.draw();
+    }
 
-    render() {
+    setAxis(axis) {
+      this.axis = axis;
+      this.draw();
+    }
+
+    setData(data) {
+      this.data = data;
+      this.draw();
+    }
+
+    draw() {
       const svg = this.svg;
-      while (svg.firstChild) svg.removeChild(svg.firstChild);
-      const d = this.data && this.data[this.axis];
-      const iw = W - P.l - P.r, ih = H - P.t - P.b;
-      if (!d) { const t = E("text", { x: W / 2, y: H / 2, "text-anchor": "middle", class: "axis-title" }); t.textContent = "הריצו הערכה כדי לראות את העקום"; svg.append(t); return; }
+      while (svg.firstChild) svg.removeChild(svg.firstChild); // clear the old drawing
 
-      const xs = d.pts.map((p) => p.x), xmin = Math.min(...xs), xmax = Math.max(...xs);
-      const ymax = Math.max(...d.pts.map((p) => p.hi), d.you ? d.you.p : 0) * 1.08;
-      const sx = (v) => P.l + ((v - xmin) / (xmax - xmin || 1)) * iw, sy = (v) => P.t + ih - (v / ymax) * ih;
+      const curve = this.data && this.data[this.axis];
+      const plotWidth = WIDTH - PAD.left - PAD.right;
+      const plotHeight = HEIGHT - PAD.top - PAD.bottom;
 
+      if (!curve) {
+        svg.append(svgText("הריצו הערכה כדי לראות את העקום", { x: WIDTH / 2, y: HEIGHT / 2, "text-anchor": "middle", class: "axis-title" }));
+        return;
+      }
+
+      // ---- scales: data value -> pixel position
+      const xValues = curve.pts.map((p) => p.x);
+      const xMin = Math.min(...xValues);
+      const xMax = Math.max(...xValues);
+      const yMax = Math.max(...curve.pts.map((p) => p.hi), curve.you ? curve.you.p : 0) * 1.08; // 8% headroom
+      const scaleX = (v) => PAD.left + ((v - xMin) / (xMax - xMin || 1)) * plotWidth;
+      const scaleY = (v) => PAD.top + plotHeight - (v / yMax) * plotHeight;
+
+      // ---- y axis: 5 grid lines with price labels
       for (let i = 0; i < 5; i++) {
-        const y = P.t + ih - (i * ih) / 4;
-        svg.append(E("line", { x1: P.l, x2: P.l + iw, y1: y, y2: y, class: "gridline" }));
-        const t = E("text", { x: P.l - 12, y: y + 4, "text-anchor": "end", class: "axis-text" }); t.textContent = short((ymax * i) / 4); svg.append(t);
+        const y = PAD.top + plotHeight - (i * plotHeight) / 4;
+        svg.append(svgElement("line", { x1: PAD.left, x2: PAD.left + plotWidth, y1: y, y2: y, class: "gridline" }));
+        svg.append(svgText(shortMoney((yMax * i) / 4), { x: PAD.left - 12, y: y + 4, "text-anchor": "end", class: "axis-text" }));
       }
+      // ---- x axis: 6 labels and the axis title
       for (let i = 0; i < 6; i++) {
-        const v = xmin + ((xmax - xmin) * i) / 5, t = E("text", { x: sx(v), y: H - P.b + 25, "text-anchor": "middle", class: "axis-text" });
-        t.textContent = Math.round(v); svg.append(t);
+        const v = xMin + ((xMax - xMin) * i) / 5;
+        svg.append(svgText(Math.round(v), { x: scaleX(v), y: HEIGHT - PAD.bottom + 25, "text-anchor": "middle", class: "axis-text" }));
       }
-      const xl = E("text", { x: P.l + iw / 2, y: H - 10, "text-anchor": "middle", class: "axis-title" });
-      xl.textContent = this.axis === "area" ? "שטח (מ״ר)" : "שנת בנייה"; svg.append(xl);
+      svg.append(svgText(X_AXIS_TITLES[this.axis], { x: PAD.left + plotWidth / 2, y: HEIGHT - 10, "text-anchor": "middle", class: "axis-title" }));
 
-      const line = (key) => d.pts.map((p, i) => `${i ? "L" : "M"}${sx(p.x).toFixed(1)},${sy(p[key]).toFixed(1)}`).join("");
-      const lo = d.pts.map((p) => `L${sx(p.x).toFixed(1)},${sy(p.lo).toFixed(1)}`).reverse().join("");
-      svg.append(E("path", { d: line("hi") + lo + "Z", class: "curve-band" }));
-      svg.append(E("path", { d: line("hi"), class: "curve-edge" }), E("path", { d: line("lo"), class: "curve-edge" }));
-      svg.append(E("path", { d: line("p"), class: "curve-line" }));
+      // ---- the curves. "M" = move to the first point, "L" = line to the next one.
+      const linePath = (key) => curve.pts.map((p, i) => `${i ? "L" : "M"}${scaleX(p.x).toFixed(1)},${scaleY(p[key]).toFixed(1)}`).join("");
+      // The band between the low and high curves: along the top edge, then back along the bottom edge, then close
+      const lowEdgeBackwards = curve.pts.map((p) => `L${scaleX(p.x).toFixed(1)},${scaleY(p.lo).toFixed(1)}`).reverse().join("");
+      svg.append(svgElement("path", { d: linePath("hi") + lowEdgeBackwards + "Z", class: "curve-band" }));
+      svg.append(svgElement("path", { d: linePath("hi"), class: "curve-edge" }), svgElement("path", { d: linePath("lo"), class: "curve-edge" }));
+      svg.append(svgElement("path", { d: linePath("p"), class: "curve-line" }));
 
-      if (d.you) {
-        const x = sx(d.you.x), y = sy(d.you.p);
-        const lab = E("text", { x, y: y - 20, "text-anchor": "middle", class: "you-label" }); lab.textContent = "הנכס שלכם";
-        svg.append(E("circle", { cx: x, cy: y, r: 15, class: "you-halo" }), E("circle", { cx: x, cy: y, r: 6, class: "you-point" }), lab);
+      // ---- the user's own property
+      if (curve.you) {
+        const x = scaleX(curve.you.x);
+        const y = scaleY(curve.you.p);
+        svg.append(
+          svgElement("circle", { cx: x, cy: y, r: 15, class: "you-halo" }),
+          svgElement("circle", { cx: x, cy: y, r: 6, class: "you-point" }),
+          svgText("הנכס שלכם", { x, y: y - 20, "text-anchor": "middle", class: "you-label" })
+        );
       } else {
-        const t = E("text", { x: P.l + iw - 4, y: P.t + 14, "text-anchor": "end", class: "axis-title" }); t.textContent = "שנת הבנייה לא צוינה"; svg.append(t);
+        svg.append(svgText("שנת הבנייה לא צוינה", { x: PAD.left + plotWidth - 4, y: PAD.top + 14, "text-anchor": "end", class: "axis-title" }));
       }
     }
   }
-  window.CurveChart = CurveChart;
+
+  RP.CurveChart = CurveChart;
 })();

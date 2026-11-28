@@ -1,308 +1,442 @@
-/* RealPrice page logic (Auto-Price layout): stepper form, estimate + range, deal score, surroundings, market position,
-   price curves, nearby alternatives, "why this price" receipt, what-if sliders, dataset + model stats. */
+/* The page itself: reads the form, shows the results and handles clicks.
+   All calculations are done by predictor.js and analysis.js; this file only deals with the page (the DOM). */
 (function () {
-  if (!RP.requireData("RP_META", "RP_POI", "RP_MODEL")) return;
-  const $ = (s) => document.querySelector(s), $$ = (s) => [...document.querySelectorAll(s)];
-  const M = RP_MODEL, META = RP_META, money = RP.money, whole = RP.fmt;
-  const ltr = (s) => `<bdi dir="ltr">${s}</bdi>`;
-  const signed = (n) => `${n > 0 ? "+" : n < 0 ? "\u2212" : "±"}${money(Math.abs(n))}`;
-  const round5k = (n) => Math.round(n / 5000) * 5000;
-  const natureLabel = (c) => (c === M.other_label ? "אחר" : c);
+  if (!RP.requireData("RP_META", "RP_POI", "RP_MODEL")) return; // the pipeline has not generated the data files yet
+
+  const { clamp, round5k } = RP.analysis;
+  const money = RP.money;
+  const M = RP_MODEL;
+  const META = RP_META;
   const thisYear = new Date().getFullYear();
-  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
-  let loc = null, mode = "buy", last = null, wiYearTouched = false;
+  // ---------------------------------------------------------------- helpers
+  const $ = (selector) => document.querySelector(selector);
+  const $$ = (selector) => [...document.querySelectorAll(selector)];
 
-  // ---------------------------------------------------------------- small UI helpers
+  // Numbers inside Hebrew (right-to-left) text must stay left-to-right, or "₪1,200" can show up mirrored
+  const ltr = (text) => `<bdi dir="ltr">${text}</bdi>`;
+  const signed = (n) => `${n > 0 ? "+" : n < 0 ? "\u2212" : "±"}${money(Math.abs(n))}`;
+  const percent = (value, decimals = 0) => (value * 100).toFixed(decimals) + "%";
+
+  /** Colours the filled part of a range slider (the CSS reads the --fill variable). */
   function paintSlider(input) {
     const paint = () => input.style.setProperty("--fill", ((input.value - input.min) / (input.max - input.min)) * 100 + "%");
-    input.addEventListener("input", paint); paint();
+    input.addEventListener("input", paint);
+    paint();
   }
-  function animateNumber(el, to, duration = 650) {
-    const from = Number(el.dataset.value || 0), start = performance.now();
-    const step = (t) => {
-      const p = Math.min(1, (t - start) / duration), e = 1 - Math.pow(1 - p, 3);
-      el.textContent = whole(from + (to - from) * e);
-      if (p < 1) requestAnimationFrame(step); else el.dataset.value = to;
-    };
+
+  /** Counts a number up to `to` (ease-out), starting from the value it showed before. */
+  function animateNumber(element, to, duration = 650) {
+    const from = Number(element.dataset.value || 0);
+    const start = performance.now();
+    function step(now) {
+      const progress = Math.min(1, (now - start) / duration);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      element.textContent = RP.fmt(from + (to - from) * eased);
+      if (progress < 1) requestAnimationFrame(step);
+      else element.dataset.value = to;
+    }
     requestAnimationFrame(step);
   }
-  const restart = (el, cls) => { el.classList.remove(cls); void el.offsetWidth; el.classList.add(cls); };
 
+  /** Plays a CSS animation again: remove the class, force a layout so the browser notices, add it back. */
+  function restartAnimation(element, className) {
+    element.classList.remove(className);
+    void element.offsetWidth;
+    element.classList.add(className);
+  }
+
+  // ---------------------------------------------------------------- dark / light theme
+  // (index.html sets the saved theme before the page is drawn, to avoid a flash)
   $("#theme-toggle").onclick = () => {
-    const root = document.documentElement, next = root.getAttribute("data-theme") === "light" ? "dark" : "light";
+    const root = document.documentElement;
+    const next = root.getAttribute("data-theme") === "light" ? "dark" : "light";
     root.setAttribute("data-theme", next);
-    try { localStorage.setItem("realprice-theme", next); } catch (e) {}
+    try {
+      localStorage.setItem("realprice-theme", next);
+    } catch (e) {} // storage can be blocked (private mode); the theme just is not remembered
   };
 
-  // ---------------------------------------------------------------- map + picker (step 1)
+  // ---------------------------------------------------------------- step 1: location (map + picker)
+  let loc = null; // the chosen location {lat, lon, label, exact}, null until the user picks one
+
   const map = RP.createMap($("#map"), setLocation);
-  const layer = L.layerGroup().addTo(map);
-  const picker = RP.createPicker($("#picker"), setLocation);
-  function setLocation(l) {
-    loc = l;
-    RP.showLocationOnMap(map, layer, l);
-    picker.say("מיקום נבחר: " + l.label);
+  const mapLayer = L.layerGroup().addTo(map); // the markers of the current property
+  const picker = RP.initPicker($("#picker"), setLocation);
+
+  function setLocation(chosen) {
+    loc = chosen;
+    RP.showLocationOnMap(map, mapLayer, chosen);
+    picker.say("מיקום נבחר: " + chosen.label);
     $("#load-status").textContent = "";
   }
 
-  // ---------------------------------------------------------------- form fields
-  const f = { area: $("#f-area"), rooms: $("#f-rooms"), year: $("#f-year"), unknown: $("#f-year-unknown"), nature: $("#f-nature"), date: $("#f-date"), asking: $("#f-asking") };
-  f.nature.innerHTML = [...M.nature_categories, M.other_label].map((c) => `<option value="${c}">${natureLabel(c)}</option>`).join("");
-  f.date.value = new Date().toISOString().slice(0, 10);
-  f.year.max = thisYear + 3;
-  const fmts = {
-    "f-area": (v) => `${v} מ״ר`, "f-rooms": (v) => v, "f-year": (v) => (f.unknown.checked ? "לא ידועה" : v),
+  // ---------------------------------------------------------------- step 2 + 3: property details
+  const field = {
+    area: $("#f-area"),
+    rooms: $("#f-rooms"),
+    year: $("#f-year"),
+    yearUnknown: $("#f-year-unknown"),
+    nature: $("#f-nature"),
+    date: $("#f-date"),
+    asking: $("#f-asking"),
   };
-  [f.area, f.rooms, f.year].forEach((i) => {
-    const out = document.querySelector(`[data-out-for="${i.id}"]`), render = () => (out.textContent = fmts[i.id](i.value));
-    paintSlider(i); i.addEventListener("input", render); render();
-    f.unknown.addEventListener("change", render);
-  });
-  f.unknown.addEventListener("change", () => { f.year.disabled = f.unknown.checked; });
 
-  function inputs() {
+  field.nature.innerHTML = [...M.nature_categories, M.other_label]
+    .map((nature) => `<option value="${nature}">${RP.natureLabel(nature)}</option>`)
+    .join("");
+  field.date.value = new Date().toISOString().slice(0, 10); // today
+  field.year.max = thisYear + 3;
+
+  // The text next to each slider
+  const sliderText = {
+    "f-area": (v) => `${v} מ״ר`,
+    "f-rooms": (v) => v,
+    "f-year": (v) => (field.yearUnknown.checked ? "לא ידועה" : v),
+  };
+  [field.area, field.rooms, field.year].forEach((slider) => {
+    const output = $(`[data-out-for="${slider.id}"]`);
+    const showValue = () => (output.textContent = sliderText[slider.id](slider.value));
+    paintSlider(slider);
+    slider.addEventListener("input", showValue);
+    field.yearUnknown.addEventListener("change", showValue);
+    showValue();
+  });
+  field.yearUnknown.addEventListener("change", () => {
+    field.year.disabled = field.yearUnknown.checked;
+  });
+
+  /** The form as the `inputs` object that predictor.js and analysis.js expect. */
+  function readInputs() {
     return {
-      lat: loc.lat, lon: loc.lon, area: +f.area.value, rooms: +f.rooms.value,
-      yearBuilt: f.unknown.checked ? null : +f.year.value, nature: f.nature.value, date: new Date(f.date.value || Date.now()),
+      lat: loc.lat,
+      lon: loc.lon,
+      area: +field.area.value,
+      rooms: +field.rooms.value,
+      yearBuilt: field.yearUnknown.checked ? null : +field.year.value,
+      nature: field.nature.value,
+      date: new Date(field.date.value || Date.now()),
     };
   }
 
-  // ---------------------------------------------------------------- stepper
-  const steps = $$(".form-step"), dots = $$(".step-dot"), panel = $("#valuation-form"), status = $("#load-status");
-  let current = 1;
-  function render(dir) {
-    steps.forEach((s) => { const n = +s.dataset.step; s.classList.toggle("is-active", n === current); s.classList.toggle("dir-back", n === current && dir === "back"); });
-    dots.forEach((d) => { const n = +d.dataset.dot; d.classList.toggle("active", n === current); d.classList.toggle("done", n < current); d.setAttribute("aria-selected", n === current); });
-    $("#step-bar-fill").style.width = (current / steps.length) * 100 + "%";
-    if (current === 1) setTimeout(() => map.invalidateSize(), 60);
-  }
-  function goTo(n, dir) {
-    if (n > current && current === 1 && !loc) {
-      status.textContent = "בחרו קודם מיקום (גוש/חלקה, כתובת או לחיצה על המפה).";
-      panel.classList.remove("shake"); void panel.offsetWidth; panel.classList.add("shake"); return;
-    }
-    status.textContent = ""; current = n; render(dir);
-  }
-  $$(".step-next").forEach((b) => (b.onclick = () => goTo(+b.dataset.goto, "next")));
-  $$(".step-back").forEach((b) => (b.onclick = () => goTo(+b.dataset.goto, "back")));
-  dots.forEach((d) => {
-    d.onclick = () => goTo(+d.dataset.dot, +d.dataset.dot < current ? "back" : "next");
-    d.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); d.onclick(); } };
-  });
-  render();
-
-  $$(".mode-toggle button").forEach((b) => (b.onclick = () => {
-    $$(".mode-toggle button").forEach((x) => x.classList.remove("active")); b.classList.add("active");
-    mode = b.dataset.mode;
-    $("#submit-label").textContent = mode === "buy" ? "חשבו שווי שוק" : "חשבו מחיר מבוקש";
-  }));
-
-  // ---------------------------------------------------------------- derived views
-  /** Deal score: 100 = very cheap, 0 = very expensive (same thresholds as Auto-Price). */
-  function dealScore(value, asking) {
-    const ratio = asking / value, score = clamp(Math.round(100 - (ratio - 0.7) * 100), 0, 100);
-    if (ratio <= 0.9) return { score, label: "עסקה מצוינת", cls: "good" };
-    if (ratio <= 1.05) return { score, label: "מחיר הוגן", cls: "fair" };
-    return { score, label: "ייתכן שהמחיר גבוה", cls: "bad" };
-  }
-
-  /** Reliability heuristic: narrow range + exact parcel => higher. Not a statistical confidence interval. */
-  function reliability(r, l, xs) {
-    const width = (r.high - r.low) / r.price;
-    let s = 100 - width * 60 - (l.exact === false ? 20 : 0) - (xs.yearBuilt == null ? 5 : 0);
-    s = clamp(Math.round(s), 15, 95);
-    return { s, level: s >= 70 ? "גבוהה" : s >= 45 ? "בינונית" : "נמוכה", width };
-  }
-
-  /** Same property at points on rings around the location. Points far from any school/stop are skipped (sea, fields). */
-  function sweep(xs, rings, dirs) {
-    const out = [];
-    for (const d of rings) for (let k = 0; k < dirs; k++) {
-      const a = (k / dirs) * 2 * Math.PI, lat = xs.lat + (d * Math.cos(a)) / 111320, lon = xs.lon + (d * Math.sin(a)) / (111320 * Math.cos((xs.lat * Math.PI) / 180));
-      if (lat < META.bbox.lat[0] || lat > META.bbox.lat[1] || lon < META.bbox.lon[0] || lon > META.bbox.lon[1]) continue;
-      const e = RP.estimate({ ...xs, lat, lon });
-      const nearest = Math.min(...e.near.layers.map((x) => (x.nearest ? x.nearest.d : Infinity)));
-      if (nearest <= 700) out.push({ ...e, lat, lon, d, k, dirs });
-    }
-    return out;
-  }
-  const DIRS8 = ["צפון", "צפון-מזרח", "מזרח", "דרום-מזרח", "דרום", "דרום-מערב", "מערב", "צפון-מערב"];
-
-  function curves(xs, r) {
-    const pt = (x, patch) => { const p = RP.predict({ ...xs, ...patch }); return { x, p: p.price, lo: p.low, hi: p.high }; };
-    const area = [], year = [];
-    for (let a = 20; a <= 250; a += 10) area.push(pt(a, { area: a, rooms: clamp(xs.rooms, 1, Math.max(1, a / 12)) }));
-    for (let y = 1950; y <= thisYear + 2; y += 4) year.push(pt(y, { yearBuilt: y }));
-    return {
-      area: { pts: area, you: { x: clamp(xs.area, 20, 250), p: r.price } },
-      year: { pts: year, you: xs.yearBuilt == null ? null : { x: clamp(xs.yearBuilt, 1950, thisYear + 2), p: r.price } },
+  // "Buy" mode asks "is it worth it?", "sell" mode asks "how much should I ask?"
+  let mode = "buy";
+  $$(".mode-toggle button").forEach((button) => {
+    button.onclick = () => {
+      $$(".mode-toggle button").forEach((b) => b.classList.remove("active"));
+      button.classList.add("active");
+      mode = button.dataset.mode;
+      $("#submit-label").textContent = mode === "buy" ? "חשבו שווי שוק" : "חשבו מחיר מבוקש";
     };
+  });
+
+  // ---------------------------------------------------------------- the 3-step form
+  const steps = $$(".form-step");
+  const stepDots = $$(".step-dot");
+  const form = $("#valuation-form");
+  const formStatus = $("#load-status");
+  let currentStep = 1;
+
+  function showStep(direction) {
+    steps.forEach((step) => {
+      const isCurrent = +step.dataset.step === currentStep;
+      step.classList.toggle("is-active", isCurrent);
+      step.classList.toggle("dir-back", isCurrent && direction === "back"); // slide in from the other side
+    });
+    stepDots.forEach((dot) => {
+      const n = +dot.dataset.dot;
+      dot.classList.toggle("active", n === currentStep);
+      dot.classList.toggle("done", n < currentStep);
+      dot.setAttribute("aria-selected", n === currentStep);
+    });
+    $("#step-bar-fill").style.width = (currentStep / steps.length) * 100 + "%";
+    // A map that was hidden while another step was shown must be told to measure itself again
+    if (currentStep === 1) setTimeout(() => map.invalidateSize(), 60);
   }
 
-  const chart = new CurveChart($("#curve-svg"));
-  $$(".axis-toggle[aria-label='ציר'] button").forEach((b) => (b.onclick = () => {
-    $$(".axis-toggle[aria-label='ציר'] button").forEach((x) => x.classList.remove("active")); b.classList.add("active"); chart.setAxis(b.dataset.axis);
-  }));
+  function goToStep(n, direction) {
+    if (n > currentStep && currentStep === 1 && !loc) {
+      // cannot leave step 1 without a location: shake the form and say why
+      formStatus.textContent = "בחרו קודם מיקום (גוש/חלקה, כתובת או לחיצה על המפה).";
+      restartAnimation(form, "shake");
+      return;
+    }
+    formStatus.textContent = "";
+    currentStep = n;
+    showStep(direction);
+  }
 
-  // ---------------------------------------------------------------- renderers
-  function renderSurroundings(r) {
-    const tiles = r.near.layers.map(({ layer, nearest, count }) =>
-      `<div><strong>${nearest ? RP.meters(nearest.d) : "-"}</strong><span>${layer.icon} ${layer.label} הקרוב</span><em>${nearest ? (nearest.p.name || "ללא שם") + " · " : ""}${count} ברדיוס ${RP.meters(layer.radius)}</em></div>`);
-    tiles.push(`<div><strong>${RP.meters(r.near.distCenter)}</strong><span>🏙️ מרחק ממרכז תל אביב</span><em>קו אווירי</em></div>`);
+  $$(".step-next").forEach((button) => (button.onclick = () => goToStep(+button.dataset.goto, "next")));
+  $$(".step-back").forEach((button) => (button.onclick = () => goToStep(+button.dataset.goto, "back")));
+  stepDots.forEach((dot) => {
+    dot.onclick = () => goToStep(+dot.dataset.dot, +dot.dataset.dot < currentStep ? "back" : "next");
+    dot.onkeydown = (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        dot.onclick();
+      }
+    };
+  });
+  showStep();
+
+  // ---------------------------------------------------------------- showing the results
+  const chart = new RP.CurveChart($("#curve-svg"));
+  $$(".axis-toggle[aria-label='ציר'] button").forEach((button) => {
+    button.onclick = () => {
+      $$(".axis-toggle[aria-label='ציר'] button").forEach((b) => b.classList.remove("active"));
+      button.classList.add("active");
+      chart.setAxis(button.dataset.axis);
+    };
+  });
+
+  function showPrice(result) {
+    animateNumber($("#price-value"), round5k(result.price));
+    restartAnimation($("#price-value"), "bump");
+    $("#range-low").textContent = money(round5k(result.low));
+    $("#range-high").textContent = money(round5k(result.high));
+    const rangePercent = Math.round((M.interval[1] - M.interval[0]) * 100);
+    $("#range-note").textContent = `טווח סביר (${rangePercent}%) – אומדן סטטיסטי, לא שמאות.`;
+  }
+
+  function showReliability(result, inputs) {
+    const rel = RP.analysis.reliability(result, loc, inputs);
+    $("#coverage-level").textContent = rel.level;
+    $("#coverage-fill").style.width = rel.score + "%";
+    const approximate = loc.exact === false ? "; המיקום משוער (מרכז הגוש)" : "";
+    $("#coverage-text").textContent = `רוחב הטווח הוא ${Math.round(rel.width * 100)}% מהמחיר${approximate}. מדד יוריסטי, לא רווח סמך סטטיסטי.`;
+  }
+
+  /** The deal-score card; shown only if the user entered an asking price. */
+  function showDeal(estimate, asking) {
+    const card = $("#deal-card");
+    if (!(asking > 0)) {
+      card.hidden = true;
+      return;
+    }
+    const deal = RP.analysis.dealScore(estimate, asking);
+    const gap = Math.round((Math.abs(estimate - asking) / estimate) * 100);
+    card.hidden = false;
+    card.className = "deal-card " + deal.cls;
+    $("#deal-score").textContent = deal.score + " / 100";
+    $("#deal-label").textContent = deal.label;
+    $("#deal-fill").style.width = deal.score + "%";
+    const who = mode === "sell" ? "המחיר שביקשתם" : "המוכר מבקש";
+    const direction = asking < estimate ? "מתחת" : "מעל";
+    $("#deal-explain").innerHTML = `${who} ${ltr(money(asking))} – ${gap}% ${direction} להערכת המודל.`;
+  }
+
+  /** Distance to the nearest school and stop, and to the centre of Tel Aviv. */
+  function showSurroundings(result) {
+    const tiles = result.near.layers.map(({ layer, nearest, count }) => {
+      const distance = nearest ? RP.meters(nearest.d) : "-";
+      const name = nearest ? (nearest.p.name || "ללא שם") + " · " : "";
+      return `<div><strong>${distance}</strong><span>${layer.icon} ${layer.label} הקרוב</span><em>${name}${count} ברדיוס ${RP.meters(layer.radius)}</em></div>`;
+    });
+    tiles.push(`<div><strong>${RP.meters(result.near.distCenter)}</strong><span>🏙️ מרחק ממרכז תל אביב</span><em>קו אווירי</em></div>`);
     $("#near-grid").innerHTML = tiles.join("");
   }
 
-  function renderMarket(xs, r) {
-    const pts = sweep(xs, [600, 1500, 3000], 16);
-    if (pts.length < 6) {
-      $("#percentile").textContent = "—"; $("#position-title").textContent = "אין מספיק נקודות להשוואה";
-      $("#position-text").textContent = "באזור הזה כמעט אין נקודות ידועות (בית ספר/תחנה) לשם השוואה."; $("#market-summary").textContent = "ההשוואה לא זמינה במיקום הזה.";
+  /** Where does the property stand among the same property at other places within 3 km? Plus the price curves. */
+  function showMarket(inputs, result) {
+    const points = RP.analysis.sweep(inputs, [600, 1500, 3000], 16);
+    if (points.length < 6) {
+      $("#percentile").textContent = "—";
+      $("#position-title").textContent = "אין מספיק נקודות להשוואה";
+      $("#position-text").textContent = "באזור הזה כמעט אין נקודות ידועות (בית ספר/תחנה) לשם השוואה.";
+      $("#market-summary").textContent = "ההשוואה לא זמינה במיקום הזה.";
     } else {
-      const pct = Math.round((pts.filter((p) => p.perSqm < r.perSqm).length / pts.length) * 100);
-      $("#percentile").textContent = pct; $("#position-marker").style.setProperty("--pos", pct + "%");
+      // percentile = the share of the other places where the same property is cheaper per sqm
+      const cheaper = points.filter((p) => p.perSqm < result.perSqm).length;
+      const pct = Math.round((cheaper / points.length) * 100);
+      $("#percentile").textContent = pct;
+      $("#position-marker").style.setProperty("--pos", pct + "%");
       $("#position-scope").textContent = "עד 3 ק״מ";
       $("#position-title").textContent = pct >= 70 ? "יקר מרוב הנקודות בסביבה" : pct <= 30 ? "זול מרוב הנקודות בסביבה" : "באמצע טווח המחירים באזור";
-      $("#position-text").textContent = `מחיר המ״ר כאן גבוה מ-${pct}% מתוך ${pts.length} נקודות בטווח 3 ק״מ, לאותו נכס בדיוק (לפי המודל).`;
-      $("#market-summary").textContent = `${pts.length} נקודות בסביבה הושוו לנכס שלכם, כולן מחושבות במודל.`;
+      $("#position-text").textContent = `מחיר המ״ר כאן גבוה מ-${pct}% מתוך ${points.length} נקודות בטווח 3 ק״מ, לאותו נכס בדיוק (לפי המודל).`;
+      $("#market-summary").textContent = `${points.length} נקודות בסביבה הושוו לנכס שלכם, כולן מחושבות במודל.`;
     }
-    chart.setData(curves(xs, r));
+    chart.setData(RP.analysis.priceCurves(inputs, result));
   }
 
-  function renderAround(xs, r) {
+  const COMPASS = ["צפון", "צפון-מזרח", "מזרח", "דרום-מזרח", "דרום", "דרום-מערב", "מערב", "צפון-מערב"];
+
+  /** Cards with the same property 1.5 km away in each of the 8 compass directions. */
+  function showAround(inputs, result) {
     const grid = $("#similar-grid");
-    const pts = sweep(xs, [1500], 8);
-    if (!pts.length) { grid.innerHTML = '<div class="empty-card">לא נמצאו נקודות מאוישות בסביבה להשוואה.</div>'; return; }
-    grid.innerHTML = pts.map((p) => {
-      const d = p.price - r.price, near = p.near.layers.map((x) => x.nearest && `${x.layer.icon} ${RP.meters(x.nearest.d)}`).filter(Boolean).join(" · ");
-      return `<article class="similar-card"><div class="similar-title"><strong>${DIRS8[p.k]}</strong><span>${RP.meters(p.d)}</span></div><div class="sub">${near || "—"}</div>
-        <div class="similar-bottom"><strong>${ltr(money(round5k(p.price)))}</strong><span class="${d >= 0 ? "above" : "below"}">${ltr(signed(round5k(d)))} מההערכה</span></div></article>`;
-    }).join("");
-  }
-
-  function renderDeal(price, asking) {
-    const dc = $("#deal-card");
-    if (!(asking > 0)) { dc.hidden = true; return; }
-    const d = dealScore(price, asking), gap = Math.round((Math.abs(price - asking) / price) * 100);
-    dc.hidden = false; dc.className = "deal-card " + d.cls;
-    $("#deal-score").textContent = d.score + " / 100"; $("#deal-label").textContent = d.label; $("#deal-fill").style.width = d.score + "%";
-    $("#deal-explain").innerHTML = `${mode === "sell" ? "המחיר שביקשתם" : "המוכר מבקש"} ${ltr(money(asking))} – ${gap}% ${asking < price ? "מתחת" : "מעל"} להערכת המודל.`;
-  }
-
-  /** "Why this price?": start from a typical flat in central Tel Aviv, swap one factor at a time (cumulative), re-run the model. */
-  function renderReceipt(xs, r) {
-    const C = META.center, base = { lat: C.lat, lon: C.lon, area: 90, rooms: 4, yearBuilt: null, nature: "דירה בבית קומות", date: xs.date };
-    const short = (t) => (t.length > 30 ? t.slice(0, 29) + "…" : t);
-    const plan = [
-      ["מיקום", "מרכז תל אביב", short(loc.label), { lat: xs.lat, lon: xs.lon }],
-      ["שטח", "90 מ״ר", xs.area + " מ״ר", { area: xs.area }],
-      ["חדרים", "4", String(xs.rooms), { rooms: xs.rooms }],
-      ["שנת בנייה", "לא ידועה", xs.yearBuilt ?? "לא ידועה", { yearBuilt: xs.yearBuilt }],
-      ["סוג נכס", "דירה בבית קומות", natureLabel(xs.nature), { nature: xs.nature }],
-    ];
-    let cur = { ...base }, prev = RP.estimate(cur).price; const startPrice = prev, rows = [];
-    for (const [label, from, to, patch] of plan) {
-      const next = { ...cur, ...patch }, p = RP.estimate(next).price;
-      if (String(from) !== String(to) || Math.abs(p - prev) >= 1) rows.push({ label, from, to, delta: p - prev });
-      cur = next; prev = p;
+    const points = RP.analysis.sweep(inputs, [1500], 8);
+    if (!points.length) {
+      grid.innerHTML = '<div class="empty-card">לא נמצאו נקודות מאוישות בסביבה להשוואה.</div>';
+      return;
     }
-    $("#receipt-empty").hidden = true; $("#receipt").hidden = false;
-    $("#receipt-car").textContent = `${xs.area} מ״ר · ${xs.rooms} חד׳`;
+    grid.innerHTML = points
+      .map((p) => {
+        const diff = p.price - result.price;
+        const places = p.near.layers.map((l) => l.nearest && `${l.layer.icon} ${RP.meters(l.nearest.d)}`).filter(Boolean).join(" · ");
+        return `<article class="similar-card"><div class="similar-title"><strong>${COMPASS[p.k]}</strong><span>${RP.meters(p.d)}</span></div><div class="sub">${places || "—"}</div>
+        <div class="similar-bottom"><strong>${ltr(money(round5k(p.price)))}</strong><span class="${diff >= 0 ? "above" : "below"}">${ltr(signed(round5k(diff)))} מההערכה</span></div></article>`;
+      })
+      .join("");
+  }
+
+  function showReceipt(inputs, result) {
+    const { startPrice, rows } = RP.analysis.receipt(inputs, loc.label);
+    $("#receipt-empty").hidden = true;
+    $("#receipt").hidden = false;
+    $("#receipt-car").textContent = `${inputs.area} מ״ר · ${inputs.rooms} חד׳`;
     $("#receipt-date").textContent = new Date().toLocaleDateString("he-IL", { year: "numeric", month: "short", day: "numeric" });
     $("#receipt-base-value").textContent = money(startPrice);
     $("#receipt-base-note").textContent = "(דירה טיפוסית: 90 מ״ר, 4 חדרים, מרכז תל אביב)";
-    $("#receipt-items").innerHTML = rows.map((it, i) => `<div class="receipt-item" style="animation-delay:${i * 90}ms"><div class="ri-text"><span class="ri-label">${it.label}</span><span class="ri-detail">${it.from} ← ${it.to}</span></div><span class="ri-amount ${it.delta >= 0 ? "pos" : "neg"}">${signed(it.delta)}</span></div>`).join("");
-    $("#receipt-total").textContent = money(r.price);
+    // each line appears 90 ms after the previous one
+    $("#receipt-items").innerHTML = rows
+      .map((row, i) => `<div class="receipt-item" style="animation-delay:${i * 90}ms"><div class="ri-text"><span class="ri-label">${row.label}</span><span class="ri-detail">${row.from} ← ${row.to}</span></div><span class="ri-amount ${row.delta >= 0 ? "pos" : "neg"}">${signed(row.delta)}</span></div>`)
+      .join("");
+    $("#receipt-total").textContent = money(result.price);
     $("#receipt-note").textContent = "הערכת הבסיס + כל השורות מעלה משחזרים בדיוק את חיזוי המודל (לפני עיגול).";
   }
 
-  function renderNatureBars(xs) {
-    const rows = [...M.nature_categories, M.other_label].map((n) => [natureLabel(n), RP.estimate({ ...xs, nature: n }).price]);
-    const max = Math.max(...rows.map((r) => r[1])) || 1;
-    $("#nature-bars").innerHTML = rows.map(([k, v]) => `<div class="bar-row wide"><span>${k}</span><div><i style="width:${(v / max) * 100}%"></i></div><b>${money(round5k(v))}</b></div>`).join("") + '<p class="note">אותו שטח, חדרים ומיקום – רק סוג הנכס משתנה.</p>';
+  /** Bars with the price of the same property for each deal type. */
+  function showNatureBars(inputs) {
+    const rows = RP.analysis.priceByNature(inputs);
+    const maxPrice = Math.max(...rows.map((r) => r.price)) || 1;
+    $("#nature-bars").innerHTML =
+      rows
+        .map((r) => `<div class="bar-row wide"><span>${r.label}</span><div><i style="width:${(r.price / maxPrice) * 100}%"></i></div><b>${money(round5k(r.price))}</b></div>`)
+        .join("") + '<p class="note">אותו שטח, חדרים ומיקום – רק סוג הנכס משתנה.</p>';
   }
 
-  // ---------------------------------------------------------------- submit
-  panel.onsubmit = async (e) => {
-    e.preventDefault();
-    if (!loc) { goTo(1, "back"); status.textContent = "בחרו קודם מיקום."; return; }
-    status.textContent = "מנתח נתוני שוק…"; panel.classList.add("is-loading"); $(".calc-submit").classList.add("is-busy");
-    await new Promise((r) => setTimeout(r, 120));
-    try {
-      const xs = inputs(); RP.showLocationOnMap(map, layer, loc);
-      const r = RP.predict(xs); last = { xs, r };
-      animateNumber($("#price-value"), round5k(r.price)); restart($("#price-value"), "bump");
-      $("#range-low").textContent = money(round5k(r.low)); $("#range-high").textContent = money(round5k(r.high));
-      $("#range-note").textContent = `טווח סביר (${Math.round((M.interval[1] - M.interval[0]) * 100)}%) – אומדן סטטיסטי, לא שמאות.`;
-
-      const rel = reliability(r, loc, xs);
-      $("#coverage-level").textContent = rel.level; $("#coverage-fill").style.width = rel.s + "%";
-      $("#coverage-text").textContent = `רוחב הטווח הוא ${Math.round(rel.width * 100)}% מהמחיר${loc.exact === false ? "; המיקום משוער (מרכז הגוש)" : ""}. מדד יוריסטי, לא רווח סמך סטטיסטי.`;
-      renderDeal(r.price, +f.asking.value);
-      renderSurroundings(r); renderMarket(xs, r); renderAround(xs, r); renderReceipt(xs, r); renderNatureBars(xs);
-
-      // seed what-if from this result
-      $("#whatif-area").value = xs.area; $("#whatif-rooms").value = xs.rooms;
-      wiYearTouched = xs.yearBuilt != null; $("#whatif-year").value = xs.yearBuilt ?? 1995;
-      $$("#whatif-area,#whatif-rooms,#whatif-year").forEach((el) => el.dispatchEvent(new Event("input")));
-      $("#whatif-current").textContent = money(round5k(r.price)); $("#whatif-new").textContent = money(round5k(r.price));
-      $("#whatif-delta").textContent = "הזיזו סליידר כדי להריץ חיזוי נוסף של המודל.";
-      status.textContent = "ההערכה הושלמה";
-      if (window.innerWidth < 900) $(".result-panel").scrollIntoView({ behavior: "smooth", block: "start" });
-    } catch (err) {
-      console.error(err); status.textContent = "לא הצלחנו לחשב הערכה. בדקו את הפרטים ונסו שוב.";
-    } finally { panel.classList.remove("is-loading"); $(".calc-submit").classList.remove("is-busy"); }
+  // ---------------------------------------------------------------- what-if sliders
+  const whatIf = { area: $("#whatif-area"), rooms: $("#whatif-rooms"), year: $("#whatif-year") };
+  const whatIfText = { area: $("#whatif-area-value"), rooms: $("#whatif-rooms-value"), year: $("#whatif-year-value") };
+  // The year slider always has a position, but it only counts once the user has moved it (or entered a year)
+  let whatIfYearUsed = false;
+  const whatIfLabel = {
+    area: (v) => `${v} מ״ר`,
+    rooms: (v) => v,
+    year: (v) => (whatIfYearUsed ? v : "לא ידועה"),
   };
+  let lastResult = null; // {inputs, result} of the last estimate; the what-if sliders compare against it
 
-  // ---------------------------------------------------------------- what-if
-  const wi = { area: $("#whatif-area"), rooms: $("#whatif-rooms"), year: $("#whatif-year") };
-  const wiOut = { area: $("#whatif-area-value"), rooms: $("#whatif-rooms-value"), year: $("#whatif-year-value") };
-  wi.year.max = thisYear + 3;
-  const wiLabel = { area: (v) => `${v} מ״ר`, rooms: (v) => v, year: (v) => (wiYearTouched ? v : "לא ידועה") };
-  Object.keys(wi).forEach((k) => {
-    paintSlider(wi[k]); wiOut[k].textContent = wiLabel[k](wi[k].value);
-    wi[k].addEventListener("input", (e) => {
-      if (k === "year" && e.isTrusted) wiYearTouched = true;
-      wiOut[k].textContent = wiLabel[k](wi[k].value);
-      if (!last || !e.isTrusted) return;
-      const xs = { ...last.xs, area: +wi.area.value, rooms: +wi.rooms.value, yearBuilt: wiYearTouched ? +wi.year.value : last.xs.yearBuilt };
-      const p = RP.estimate(xs).price, d = p - last.r.price;
-      $("#whatif-new").textContent = money(round5k(p)); restart($("#whatif-new"), "pulse");
-      const note = $("#whatif-delta"); note.innerHTML = `${ltr(signed(round5k(d)))} לעומת ההערכה הנוכחית · הרצה אמיתית של המודל`; restart(note, "flash");
+  whatIf.year.max = thisYear + 3;
+  Object.keys(whatIf).forEach((key) => {
+    paintSlider(whatIf[key]);
+    whatIfText[key].textContent = whatIfLabel[key](whatIf[key].value);
+
+    whatIf[key].addEventListener("input", (e) => {
+      // e.isTrusted is false for the events that showResult() fires by itself to refresh the labels
+      if (key === "year" && e.isTrusted) whatIfYearUsed = true;
+      whatIfText[key].textContent = whatIfLabel[key](whatIf[key].value);
+      if (!lastResult || !e.isTrusted) return;
+
+      const inputs = {
+        ...lastResult.inputs,
+        area: +whatIf.area.value,
+        rooms: +whatIf.rooms.value,
+        yearBuilt: whatIfYearUsed ? +whatIf.year.value : lastResult.inputs.yearBuilt,
+      };
+      const price = RP.estimate(inputs).price;
+      const diff = price - lastResult.result.price;
+      $("#whatif-new").textContent = money(round5k(price));
+      restartAnimation($("#whatif-new"), "pulse");
+      const note = $("#whatif-delta");
+      note.innerHTML = `${ltr(signed(round5k(diff)))} לעומת ההערכה הנוכחית · הרצה אמיתית של המודל`;
+      restartAnimation(note, "flash");
     });
   });
 
-  // ---------------------------------------------------------------- dataset + model stats
-  const m = META.metrics, pct = (v, d = 0) => (v * 100).toFixed(d) + "%";
-  $("#dash-deals").textContent = whole(META.nDeals); $("#dash-parcels").textContent = whole(META.nParcels);
-  $("#dash-schools").textContent = whole(RP_POI.schools.length); $("#dash-transit").textContent = whole(RP_POI.transit.length);
-  $("#dash-r2").textContent = m.r2.toFixed(3); $("#dash-ape").textContent = pct(m.median_ape, 1);
-  $("#accuracy-bars").innerHTML = [["בטווח 10% מהמחיר", m.within_10pct], ["בטווח 20% מהמחיר", m.within_20pct], ["כיסוי הטווח המוצג", M.interval_coverage]]
-    .map(([k, v]) => `<div class="bar-row wide"><span>${k}</span><div><i style="width:${v * 100}%"></i></div><b>${pct(v)}</b></div>`).join("");
+  /** Puts the values of the new estimate into the what-if sliders. */
+  function resetWhatIf(inputs, result) {
+    whatIf.area.value = inputs.area;
+    whatIf.rooms.value = inputs.rooms;
+    whatIfYearUsed = inputs.yearBuilt != null;
+    whatIf.year.value = inputs.yearBuilt ?? 1995;
+    Object.values(whatIf).forEach((slider) => slider.dispatchEvent(new Event("input"))); // refresh labels and fill
+    $("#whatif-current").textContent = money(round5k(result.price));
+    $("#whatif-new").textContent = money(round5k(result.price));
+    $("#whatif-delta").textContent = "הזיזו סליידר כדי להריץ חיזוי נוסף של המודל.";
+  }
 
-  $("#stat-r2").textContent = m.r2.toFixed(4); $("#stat-mae").textContent = money(m.mae_nis); $("#stat-rmse").textContent = money(m.rmse_nis);
-  $("#stat-rows").textContent = whole(M.n_train);
+  // ---------------------------------------------------------------- submit: calculate everything
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    if (!loc) {
+      goToStep(1, "back");
+      formStatus.textContent = "בחרו קודם מיקום.";
+      return;
+    }
+    formStatus.textContent = "מנתח נתוני שוק…";
+    form.classList.add("is-loading");
+    $(".calc-submit").classList.add("is-busy");
+    // a short pause so the browser can draw the "loading" state before the (synchronous) calculation blocks it
+    await new Promise((resolve) => setTimeout(resolve, 120));
+
+    try {
+      const inputs = readInputs();
+      RP.showLocationOnMap(map, mapLayer, loc);
+      const result = RP.predict(inputs);
+      lastResult = { inputs, result };
+
+      showPrice(result);
+      showReliability(result, inputs);
+      showDeal(result.price, +field.asking.value);
+      showSurroundings(result);
+      showMarket(inputs, result);
+      showAround(inputs, result);
+      showReceipt(inputs, result);
+      showNatureBars(inputs);
+      resetWhatIf(inputs, result);
+
+      formStatus.textContent = "ההערכה הושלמה";
+      // on a phone the result panel is below the form, so scroll to it
+      if (window.innerWidth < 900) $(".result-panel").scrollIntoView({ behavior: "smooth", block: "start" });
+    } catch (error) {
+      console.error(error);
+      formStatus.textContent = "לא הצלחנו לחשב הערכה. בדקו את הפרטים ונסו שוב.";
+    } finally {
+      form.classList.remove("is-loading");
+      $(".calc-submit").classList.remove("is-busy");
+    }
+  };
+
+  // ---------------------------------------------------------------- numbers about the data and the model (these never change)
+  const metrics = META.metrics; // the model's score on the test deals
+  $("#dash-deals").textContent = RP.fmt(META.nDeals);
+  $("#dash-parcels").textContent = RP.fmt(META.nParcels);
+  $("#dash-schools").textContent = RP.fmt(RP_POI.schools.length);
+  $("#dash-transit").textContent = RP.fmt(RP_POI.transit.length);
+  $("#dash-r2").textContent = metrics.r2.toFixed(3);
+  $("#dash-ape").textContent = percent(metrics.median_ape, 1);
+  $("#accuracy-bars").innerHTML = [
+    ["בטווח 10% מהמחיר", metrics.within_10pct],
+    ["בטווח 20% מהמחיר", metrics.within_20pct],
+    ["כיסוי הטווח המוצג", M.interval_coverage],
+  ]
+    .map(([label, share]) => `<div class="bar-row wide"><span>${label}</span><div><i style="width:${share * 100}%"></i></div><b>${percent(share)}</b></div>`)
+    .join("");
+
+  $("#stat-r2").textContent = metrics.r2.toFixed(4);
+  $("#stat-mae").textContent = money(metrics.mae_nis);
+  $("#stat-rmse").textContent = money(metrics.rmse_nis);
+  $("#stat-rows").textContent = RP.fmt(M.n_train);
   $("#stat-trained").textContent = new Date(M.trained_at + "T00:00:00").toLocaleDateString("he-IL", { year: "numeric", month: "short", day: "numeric" });
-  $("#stat-features").textContent = M.feature_names.length; $("#stat-trees").textContent = whole(M.models.median.roots.length);
-  $("#stat-lo").textContent = Math.round(M.interval[0] * 100); $("#stat-hi").textContent = Math.round(M.interval[1] * 100);
+  $("#stat-features").textContent = M.feature_names.length;
+  $("#stat-trees").textContent = RP.fmt(M.models.median.roots.length);
+  $("#stat-lo").textContent = Math.round(M.interval[0] * 100);
+  $("#stat-hi").textContent = Math.round(M.interval[1] * 100);
 
-  /** Importance = share of splits that use each factor group in the median model (split frequency, not gain). */
-  (function importance() {
-    const med = M.models.median, count = new Array(M.feature_names.length).fill(0);
-    for (let i = 0; i < med.f.length; i++) if (med.f[i] >= 0) count[med.f[i]]++;
-    const groupOf = (n) => /^(lat|long|distance_from_center)$/.test(n) ? "מיקום" : /^(asset_area|room_num|area_per_room)$/.test(n) ? "שטח וחדרים"
-      : /^(year_built|age)$/.test(n) ? "גיל הנכס" : /^deal_/.test(n) ? "תאריך העסקה" : /school|transit|public_transport/.test(n) ? "קרבה לשירותים" : "סוג נכס";
-    const g = {}; M.feature_names.forEach((n, i) => (g[groupOf(n)] = (g[groupOf(n)] || 0) + count[i]));
-    const total = Object.values(g).reduce((a, b) => a + b, 0) || 1;
-    $("#importance-method").textContent = "תדירות השימוש בכל קבוצת גורמים בפיצולי העצים של מודל החציון – מדד גס, לא תרומה למחיר.";
-    $("#importance-bars").innerHTML = Object.entries(g).sort((a, b) => b[1] - a[1]).map(([k, v]) => {
-      const p = Math.round((v / total) * 100);
-      return `<div class="imp-row"><span>${k}</span><div class="imp-track"><i class="imp-fill" style="--pct:${p}%"></i></div><b>${p}%</b></div>`;
-    }).join("");
-  })();
+  $("#importance-method").textContent = "תדירות השימוש בכל קבוצת גורמים בפיצולי העצים של מודל החציון – מדד גס, לא תרומה למחיר.";
+  $("#importance-bars").innerHTML = RP.analysis
+    .factorImportance()
+    .map(({ name, percent: pct }) => `<div class="imp-row"><span>${name}</span><div class="imp-track"><i class="imp-fill" style="--pct:${pct}%"></i></div><b>${pct}%</b></div>`)
+    .join("");
 
-  $("#live-dot").textContent = "המודל מוכן";
+  // ---------------------------------------------------------------- page behaviour
+  $("#live-dot").textContent = "המודל מוכן"; // replaces "loading model…" once everything above has run
   $("#cta-start").onclick = () => $("#valuation").scrollIntoView({ behavior: "smooth" });
-  const io = new IntersectionObserver((es) => es.forEach((e) => e.isIntersecting && e.target.classList.add("in-view")), { threshold: 0.08 });
-  $$(".section,.hero-copy,.hero-visual").forEach((e) => io.observe(e));
+
+  // Sections fade in the first time they scroll into view (the CSS animates the "in-view" class)
+  const observer = new IntersectionObserver(
+    (entries) => entries.forEach((entry) => entry.isIntersecting && entry.target.classList.add("in-view")),
+    { threshold: 0.08 }
+  );
+  $$(".section,.hero-copy,.hero-visual").forEach((element) => observer.observe(element));
 })();

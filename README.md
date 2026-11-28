@@ -30,22 +30,24 @@ visitor's device.
 ## How it works
 
 ```
-Deal files (one ZIP per settlement, 51 files)
-        |  clean_data         drop unused columns, empty / zero rows, outliers
+Deal files (one file per settlement, 51 files)           python main.py runs these steps in order
+        |  cleaning        realprice/cleaning.py        drop unused columns, empty / zero rows, impossible values
         v
-  clean deals
-        |  geocode            gush / chelka / sub-chelka -> ITM -> lat / long (data.gov.il)
-        |  add_features       distance to nearest school and public transport, counts nearby, age, price per m²
+  cleaned.csv
+        |  enrichment      realprice/enrichment.py      gush / chelka -> coordinates (data.gov.il), distance to the
+        |                                               nearest school / public transport, counts nearby, age
         v
-  model table
-        |  eda                graphs  ->  reports/eda/
-        |  preprocess         one-hot encoding of deal nature, log(price per m²) target
-        v
-  numeric table
-        |  train              gradient-boosted trees: median + 10th + 90th percentile models
+  dataset.csv
+        |  eda             realprice/eda.py             charts  ->  reports/eda/
+        |  preprocessing   realprice/preprocessing.py   train / test split FIRST, then features learned from train only
+        v                  realprice/features.py        (clusters, price trends, comparable deals, target encoding)
+  features.joblib
+        |  training        realprice/training.py        ensemble (HistGradientBoosting + CatBoost + LightGBM) and the
+        |                                               website model: median + 10th + 90th percentile trees
         v
   trained models
-        |  export_model       trees, POI and parcel lookups as JavaScript files
+        |  exporting       realprice/exporting.py       trees -> arrays the browser can evaluate (checked against sklearn)
+        |  build_website   realprice/build_website.py   schools, stops and parcel coordinates as JavaScript files
         v
   website/data/*.js   ->   read by the website (website/js/)
 ```
@@ -102,21 +104,38 @@ them on one page).
 
 ```
 Real-Price/
-├── website/                   the website (static)
-│   ├── index.html             the page (English)
-│   ├── predict.html           redirects to index.html#valuation
+├── main.py                    runs the pipeline (see "Retrain the model")
+├── requirements.txt
+├── realprice/                 the Python pipeline, one module per step
+│   ├── config.py              every path, threshold and hyper-parameter in one place
+│   ├── utils.py               small helpers (logging, reading / writing files)
+│   ├── cleaning.py            step 1
+│   ├── external_data.py       loads parcels, schools and transit stops from data.gov.il
+│   ├── geo.py                 ITM <-> GPS conversion and the nearest-point search (KD-tree)
+│   ├── enrichment.py          step 2
+│   ├── eda.py                 step 3
+│   ├── features.py            leak-free feature engineering (the FeatureBuilder class)
+│   ├── preprocessing.py       step 4
+│   ├── training.py            step 5
+│   ├── exporting.py           step 6
+│   ├── build_website.py       step 7
+│   ├── demo_data.py           synthetic data for `python main.py --demo`
+│   └── diagnose_gush.py       finds where a missing gush gets lost
+├── website/                   the website (static, Hebrew, right-to-left)
+│   ├── index.html             the page
+│   ├── predict.html           redirects to index.html#valuation (old address)
 │   ├── icon.png
 │   ├── css/style.css          styling (dark / light theme)
-│   ├── js/common.js           formatting, map helpers, parcel + geocoding lookups
+│   ├── js/common.js           formatting, distances, spatial index, parcel + address lookups, map
 │   ├── js/picker.js           gush / chelka / address picker
 │   ├── js/predictor.js        feature vector + tree evaluation (runs the model in the browser)
 │   ├── js/chart.js            SVG price-curve chart
-│   ├── js/app.js              page logic (form, results, receipt, what-if, stats)
-│   └── data/                  meta.js, poi.js, model.js, parcels_*.js (created by the export step)
-├── src/                       the Python pipeline (one file per step + main.py)
-├── data/                      raw deal files, cleaned deals, model table
-├── models/                    trained models and their metrics
-└── reports/eda/               EDA images + index.html
+│   ├── js/analysis.js         deal score, reliability, receipt, price curves (calculations only)
+│   ├── js/app.js              the page itself: form, results, what-if, statistics (DOM only)
+│   └── data/                  meta.js, poi.js, model.js, parcels_*.js (created by steps 6 and 7)
+├── data/                      raw deal files and the intermediate tables (not in git)
+├── models/                    trained models (not in git)
+└── reports/                   EDA charts, training charts and metrics.json
 ```
 
 The shipped data: **1,698,771** deals, **1,095,973** mapped parcels, **22,705** schools and **34,307**
@@ -140,10 +159,22 @@ from the local data files.
 
 ```bash
 pip install -r requirements.txt
-python src/main.py
+python main.py                          # the whole pipeline
+python main.py --from-step training     # continue from a step (earlier results are reused)
+python main.py --skip-eda               # without the charts
 ```
 
-This runs the whole pipeline and overwrites the graphs, the trained models and `website/data/`.
+This overwrites the graphs, the trained models and `website/data/`. The raw deal files go into `data/raw/`
+(`.csv`, `.xlsx` or `.zip`).
+
+**Try the pipeline without the real data:**
+
+```bash
+python main.py --demo
+```
+
+generates a small synthetic data set in `demo_workspace/` and runs every step on it in about a minute, with tiny
+models. It never touches the real data or `website/data/`, so it is safe to run at any time.
 
 ## Limitations
 

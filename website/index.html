@@ -1,131 +1,417 @@
 <!doctype html>
 <html lang="he" dir="rtl">
 <head>
-<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>RealPrice – הערכת מחיר נדל״ן בישראל</title>
-<meta name="description" content="הערכת מחיר נכס בישראל לפי גוש/חלקה או כתובת: טווח מחיר, ציון עסקה, מיקום בשוק והסבר לכל שקל – הכול בדפדפן, על סמך מודל שאומן על מיליוני עסקאות.">
-<link rel="icon" type="image/png" href="icon.png"><link rel="apple-touch-icon" href="icon.png">
-<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&family=Heebo:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-<link rel="stylesheet" href="css/style.css">
-<script>(function(){try{var t=localStorage.getItem("realprice-theme");if(!t){t=window.matchMedia&&window.matchMedia("(prefers-color-scheme: light)").matches?"light":"dark";}document.documentElement.setAttribute("data-theme",t);}catch(e){}})();</script>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>RealPrice – הערכת מחיר נדל״ן בישראל</title>
+  <meta name="description" content="הערכת מחיר נכס בישראל לפי גוש/חלקה או כתובת: טווח מחיר, ציון עסקה, מיקום בשוק והסבר לכל שקל – הכול בדפדפן, על סמך מודל שאומן על מיליוני עסקאות.">
+  <link rel="icon" type="image/png" href="icon.png">
+  <link rel="apple-touch-icon" href="icon.png">
+
+  <!-- Fonts and the map library come from public CDNs; everything else is in this folder -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&family=Heebo:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="css/style.css">
+
+  <!-- Set the saved (or the system's) colour theme before the page is drawn, so it does not flash the wrong theme.
+       The theme button in js/app.js changes it later and saves the choice. -->
+  <script>
+    (function () {
+      try {
+        var theme = localStorage.getItem("realprice-theme");
+        if (!theme) {
+          theme = window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+        }
+        document.documentElement.setAttribute("data-theme", theme);
+      } catch (e) {}
+    })();
+  </script>
 </head>
 <body>
-<nav class="site-nav"><a class="brand" href="#top"><span class="brand-mark">◉</span> RealPrice</a><div class="nav-links"><a href="#valuation">הערכה</a><a href="#market">שוק</a><a href="#about">המודל</a></div><button type="button" class="theme-toggle" id="theme-toggle" aria-label="מעבר בין מצב כהה לבהיר" title="החלפת ערכת נושא"><span class="theme-icon icon-sun" aria-hidden="true">☀</span><span class="theme-icon icon-moon" aria-hidden="true">☾</span></button></nav>
-<main id="top">
 
-<section class="hero"><div class="container hero-grid"><div class="hero-copy"><div class="eyebrow">שוק הנדל״ן בישראל</div><h1>מחיר הנכס,<br><em>בלי ניחושים.</em></h1><p>הערכת מחיר לנכס לפי גוש/חלקה או כתובת, על סמך מודל שאומן על מיליוני עסקאות אמיתיות – כולו רץ בדפדפן שלכם.</p><div class="hero-actions"><button class="btn btn-primary" id="cta-start">להערכת הנכס שלי <span>→</span></button><span class="hero-note">חינם · בלי הרשמה · בלי שרת</span></div></div><div class="hero-visual"><div class="visual-grid"></div><div class="visual-orbit orbit-a"></div><div class="visual-orbit orbit-b"></div><div class="visual-tag">הערכה<br>חיה</div></div></div></section>
-
-<section class="section" id="valuation"><div class="container"><div class="section-head"><div><div class="eyebrow">01 / הערכה</div><h2>ספרו לנו על הנכס.</h2></div><p>בחרו מיקום על המפה, הזינו את פרטי הנכס, והמודל יחשב מחיר וטווח מיד – בלי לשלוח שום דבר החוצה.</p></div>
-<div class="mode-toggle" role="group" aria-label="מצב הערכה"><button type="button" class="active" data-mode="buy">קנייה <span>האם זה שווה?</span></button><button type="button" data-mode="sell">מכירה <span>כמה לבקש?</span></button></div>
-<div class="calc-layout">
-<form class="calc-panel" id="valuation-form" novalidate>
-
-<div class="step-header">
-  <div class="step-dots" role="tablist" aria-label="שלבי הטופס">
-    <div class="step-dot active" data-dot="1" role="tab" tabindex="0" aria-selected="true"><span class="step-dot-num">1</span><span class="step-dot-name">מיקום</span></div>
-    <div class="step-dot" data-dot="2" role="tab" tabindex="0" aria-selected="false"><span class="step-dot-num">2</span><span class="step-dot-name">הנכס</span></div>
-    <div class="step-dot" data-dot="3" role="tab" tabindex="0" aria-selected="false"><span class="step-dot-num">3</span><span class="step-dot-name">העסקה</span></div>
-  </div>
-  <div class="step-bar"><i id="step-bar-fill"></i></div>
-</div>
-
-<div class="form-steps" id="form-steps">
-  <div class="form-step is-active" data-step="1">
-    <div class="field-group no-border"><div class="field-group-label">איפה הנכס?</div>
-      <div id="picker"></div>
-      <div class="map-wrap"><div id="map" class="map"></div></div>
-      <p class="map-hint">אפשר גם ללחוץ ישירות על המפה כדי לבחור נקודה.</p>
+  <!-- ===================== navigation bar ===================== -->
+  <nav class="site-nav">
+    <a class="brand" href="#top"><span class="brand-mark">◉</span> RealPrice</a>
+    <div class="nav-links">
+      <a href="#valuation">הערכה</a>
+      <a href="#market">שוק</a>
+      <a href="#about">המודל</a>
     </div>
-    <div class="step-nav"><span></span><button type="button" class="btn btn-primary step-next" data-goto="2">הבא: הנכס <span>→</span></button></div>
-  </div>
+    <button type="button" class="theme-toggle" id="theme-toggle" aria-label="מעבר בין מצב כהה לבהיר" title="החלפת ערכת נושא">
+      <span class="theme-icon icon-sun" aria-hidden="true">☀</span>
+      <span class="theme-icon icon-moon" aria-hidden="true">☾</span>
+    </button>
+  </nav>
 
-  <div class="form-step" data-step="2">
-    <div class="field-group no-border"><div class="field-group-label">פרטי הנכס</div>
-      <div class="field-row three">
-        <div class="field"><label for="f-area">שטח <output data-out-for="f-area">90 מ״ר</output></label><input type="range" id="f-area" min="15" max="400" value="90"></div>
-        <div class="field"><label for="f-rooms">חדרים <output data-out-for="f-rooms">4</output></label><input type="range" id="f-rooms" min="1" max="8" step="0.5" value="4"></div>
-        <div class="field"><label for="f-year">שנת בנייה <output data-out-for="f-year">לא ידועה</output></label><input type="range" id="f-year" min="1900" max="2029" value="1995" disabled></div>
+  <main id="top">
+
+    <!-- ===================== hero ===================== -->
+    <section class="hero">
+      <div class="container hero-grid">
+        <div class="hero-copy">
+          <div class="eyebrow">שוק הנדל״ן בישראל</div>
+          <h1>מחיר הנכס,<br><em>בלי ניחושים.</em></h1>
+          <p>הערכת מחיר לנכס לפי גוש/חלקה או כתובת, על סמך מודל שאומן על מיליוני עסקאות אמיתיות – כולו רץ בדפדפן שלכם.</p>
+          <div class="hero-actions">
+            <button class="btn btn-primary" id="cta-start">להערכת הנכס שלי <span>→</span></button>
+            <span class="hero-note">חינם · בלי הרשמה · בלי שרת</span>
+          </div>
+        </div>
+        <!-- decorative animation, no content -->
+        <div class="hero-visual">
+          <div class="visual-grid"></div>
+          <div class="visual-orbit orbit-a"></div>
+          <div class="visual-orbit orbit-b"></div>
+          <div class="visual-tag">הערכה<br>חיה</div>
+        </div>
       </div>
-      <label class="check"><input type="checkbox" id="f-year-unknown" checked> שנת הבנייה לא ידועה</label>
+    </section>
+
+    <!-- ===================== 01: the valuation form (3 steps) and the result ===================== -->
+    <section class="section" id="valuation">
+      <div class="container">
+        <div class="section-head">
+          <div>
+            <div class="eyebrow">01 / הערכה</div>
+            <h2>ספרו לנו על הנכס.</h2>
+          </div>
+          <p>בחרו מיקום על המפה, הזינו את פרטי הנכס, והמודל יחשב מחיר וטווח מיד – בלי לשלוח שום דבר החוצה.</p>
+        </div>
+
+        <!-- buy = "is it worth it?", sell = "how much should I ask?" -->
+        <div class="mode-toggle" role="group" aria-label="מצב הערכה">
+          <button type="button" class="active" data-mode="buy">קנייה <span>האם זה שווה?</span></button>
+          <button type="button" data-mode="sell">מכירה <span>כמה לבקש?</span></button>
+        </div>
+
+        <div class="calc-layout">
+
+          <!-- the form: 3 steps, only one is visible at a time (js/app.js) -->
+          <form class="calc-panel" id="valuation-form" novalidate>
+            <div class="step-header">
+              <div class="step-dots" role="tablist" aria-label="שלבי הטופס">
+                <div class="step-dot active" data-dot="1" role="tab" tabindex="0" aria-selected="true"><span class="step-dot-num">1</span><span class="step-dot-name">מיקום</span></div>
+                <div class="step-dot" data-dot="2" role="tab" tabindex="0" aria-selected="false"><span class="step-dot-num">2</span><span class="step-dot-name">הנכס</span></div>
+                <div class="step-dot" data-dot="3" role="tab" tabindex="0" aria-selected="false"><span class="step-dot-num">3</span><span class="step-dot-name">העסקה</span></div>
+              </div>
+              <div class="step-bar"><i id="step-bar-fill"></i></div>
+            </div>
+
+            <div class="form-steps" id="form-steps">
+
+              <!-- step 1: where is the property? -->
+              <div class="form-step is-active" data-step="1">
+                <div class="field-group">
+                  <div class="field-group-label">איפה הנכס?</div>
+
+                  <!-- location picker (behaviour: js/picker.js) -->
+                  <div id="picker">
+                    <div class="axis-toggle wide" role="tablist">
+                      <button type="button" role="tab" class="active" data-tab="parcel">גוש / חלקה</button>
+                      <button type="button" role="tab" data-tab="address">כתובת</button>
+                    </div>
+                    <div data-form="parcel">
+                      <div class="field-row three">
+                        <div class="field"><label for="p-gush">גוש</label><input id="p-gush" type="number" min="1" inputmode="numeric"></div>
+                        <div class="field"><label for="p-chelka">חלקה</label><input id="p-chelka" type="number" min="1" inputmode="numeric"></div>
+                        <div class="field"><label for="p-sub">תת-חלקה</label><input id="p-sub" type="number" min="0" inputmode="numeric" placeholder="לא חובה"></div>
+                      </div>
+                    </div>
+                    <div data-form="address" hidden>
+                      <div class="field"><label for="p-address">כתובת (רחוב, מספר, עיר)</label><input id="p-address" type="text" autocomplete="street-address" placeholder="לדוגמה: דיזנגוף 50 תל אביב"></div>
+                    </div>
+                    <button type="button" class="btn btn-primary picker-btn" id="p-go">אתר על המפה</button>
+                    <p class="picker-status" role="status" aria-live="polite"></p>
+                  </div>
+
+                  <div class="map-wrap"><div id="map" class="map"></div></div>
+                  <p class="map-hint">אפשר גם ללחוץ ישירות על המפה כדי לבחור נקודה.</p>
+                </div>
+                <div class="step-nav">
+                  <span></span>
+                  <button type="button" class="btn btn-primary step-next" data-goto="2">הבא: הנכס <span>→</span></button>
+                </div>
+              </div>
+
+              <!-- step 2: the property -->
+              <div class="form-step" data-step="2">
+                <div class="field-group">
+                  <div class="field-group-label">פרטי הנכס</div>
+                  <div class="field-row three">
+                    <div class="field"><label for="f-area">שטח <output data-out-for="f-area">90 מ״ר</output></label><input type="range" id="f-area" min="15" max="400" value="90"></div>
+                    <div class="field"><label for="f-rooms">חדרים <output data-out-for="f-rooms">4</output></label><input type="range" id="f-rooms" min="1" max="8" step="0.5" value="4"></div>
+                    <!-- max is set by js/app.js (this year + 3) -->
+                    <div class="field"><label for="f-year">שנת בנייה <output data-out-for="f-year">לא ידועה</output></label><input type="range" id="f-year" min="1900" max="2029" value="1995" disabled></div>
+                  </div>
+                  <label class="check"><input type="checkbox" id="f-year-unknown" checked> שנת הבנייה לא ידועה</label>
+                </div>
+                <div class="step-nav">
+                  <button type="button" class="btn btn-ghost step-back" data-goto="1"><span>←</span> חזרה</button>
+                  <button type="button" class="btn btn-primary step-next" data-goto="3">הבא: העסקה <span>→</span></button>
+                </div>
+              </div>
+
+              <!-- step 3: the deal -->
+              <div class="form-step" data-step="3">
+                <div class="field-group">
+                  <div class="field-group-label">סוג העסקה</div>
+                  <div class="field-row two">
+                    <!-- the options of the select are added by js/app.js, from the deal types of the model -->
+                    <div class="field"><label for="f-nature">סוג נכס</label><select id="f-nature"></select></div>
+                    <div class="field"><label for="f-date">תאריך עסקה</label><input type="date" id="f-date"></div>
+                  </div>
+                </div>
+                <div class="asking-wrap">
+                  <label for="f-asking">מחיר מבוקש <span>לא חובה – מפעיל ציון עסקה</span></label>
+                  <div class="asking-input"><span>₪</span><input id="f-asking" type="number" min="0" step="10000" placeholder="לדוגמה: 2,350,000"><span>המוכר מבקש</span></div>
+                </div>
+                <div class="step-nav">
+                  <button type="button" class="btn btn-ghost step-back" data-goto="2"><span>←</span> חזרה</button>
+                  <button type="submit" class="btn btn-primary calc-submit"><span id="submit-label">חשבו שווי שוק</span> <span>→</span></button>
+                </div>
+              </div>
+            </div>
+
+            <div id="load-status" class="error-state" role="status"></div>
+          </form>
+
+          <!-- the result: estimate, price range, deal score, reliability -->
+          <aside class="result-panel" aria-live="polite">
+            <div class="result-top">
+              <span class="result-label">שווי שוק משוער</span>
+              <span class="live-dot" id="live-dot">טוען מודל…</span>
+            </div>
+            <div class="price-wrap"><span>₪</span><strong id="price-value">—</strong></div>
+            <div class="range-label">טווח שוק משוער</div>
+            <div class="price-range"><strong id="range-low">—</strong><span>—</span><strong id="range-high">—</strong></div>
+            <p class="range-note" id="range-note">זהו טווח משוער ולא התחייבות או שמאות.</p>
+
+            <!-- only shown when an asking price was entered -->
+            <div class="deal-card" id="deal-card" hidden>
+              <div>
+                <div class="mini-label">ציון עסקה</div>
+                <strong id="deal-score">—</strong><span id="deal-label">—</span>
+              </div>
+              <div class="deal-bar"><i id="deal-fill"></i></div>
+              <p id="deal-explain"></p>
+            </div>
+
+            <div class="coverage" id="coverage">
+              <div class="coverage-head"><span>אמינות ההערכה</span><strong id="coverage-level">—</strong></div>
+              <div class="coverage-track"><i id="coverage-fill"></i></div>
+              <p id="coverage-text">מבוססת על רוחב הטווח ועל דיוק המיקום שנבחר.</p>
+            </div>
+          </aside>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== 02: surroundings ===================== -->
+    <section class="section" id="surroundings">
+      <div class="container">
+        <div class="section-head">
+          <div>
+            <div class="eyebrow">02 / סביבה</div>
+            <h2>מה יש ליד הנכס?</h2>
+          </div>
+          <p>המרחק למוסד הלימוד ולתחנה הקרובים ביותר, ולמרכז תל אביב – גורמים שהמודל לוקח בחשבון.</p>
+        </div>
+        <!-- filled by js/app.js after an estimate -->
+        <div class="stat-grid three" id="near-grid">
+          <div><strong>—</strong><span>בחרו מיקום והריצו הערכה</span></div>
+          <div><strong>—</strong><span></span></div>
+          <div><strong>—</strong><span></span></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== 03: where the property stands in the market ===================== -->
+    <section class="section market-section" id="market">
+      <div class="container">
+        <div class="section-head">
+          <div>
+            <div class="eyebrow">03 / מיקום בשוק</div>
+            <h2>איפה הנכס שלכם עומד?</h2>
+          </div>
+          <p id="market-summary">השוואה של אותו נכס בנקודות שונות באזור, לפי המודל.</p>
+        </div>
+        <div class="position-card">
+          <div class="position-copy">
+            <div class="big-percent"><span id="percentile">—</span><small>%</small></div>
+            <h3 id="position-title">הריצו הערכה</h3>
+            <p id="position-text">כאן יופיע המיקום של הנכס ביחס לסביבתו.</p>
+            <div class="position-line"><span>0%</span><div><i id="position-marker"></i></div><span>100%</span></div>
+            <div class="position-caption"><span>זול יותר</span><strong id="position-scope">אזור</strong><span>יקר יותר</span></div>
+          </div>
+          <div class="chart-panel">
+            <div class="chart-toolbar">
+              <div class="axis-toggle" role="group" aria-label="ציר">
+                <button type="button" class="active" data-axis="area">מחיר × שטח</button>
+                <button type="button" data-axis="year">מחיר × שנת בנייה</button>
+              </div>
+              <div class="legend">
+                <span><i class="band-key"></i> טווח</span>
+                <span><i></i> עקום המודל</span>
+                <span><i class="you-dot"></i> הנכס שלכם</span>
+              </div>
+            </div>
+            <!-- drawn by js/chart.js -->
+            <svg id="curve-svg" role="img" aria-label="עקום המחיר לפי המודל"></svg>
+            <p class="chart-note">העקום מחושב מהמודל על הנכס שלכם בעת שינוי פרמטר אחד – לא עסקאות בפועל.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== 04: the same property at other places ===================== -->
+    <section class="section" id="similar">
+      <div class="container">
+        <div class="section-head">
+          <div>
+            <div class="eyebrow">04 / בסביבה</div>
+            <h2>אותו נכס, במקום אחר.</h2>
+          </div>
+          <p>הערכת המודל לאותו נכס בדיוק, במרחק קצר לכל כיוון – כדי לראות כמה המיקום משפיע.</p>
+        </div>
+        <div class="similar-grid four" id="similar-grid">
+          <div class="empty-card">הריצו הערכה כדי לראות השוואה לאזור.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== "why this price?" receipt and the what-if simulator ===================== -->
+    <section class="section insight-section">
+      <div class="container">
+        <div class="insight-grid">
+
+          <div class="insight-card" id="receipt-card">
+            <div class="eyebrow">למה המחיר הזה?</div>
+            <h2>מה עומד מאחורי המספר.</h2>
+            <p>נקודת ההתחלה היא דירה טיפוסית במרכז תל אביב. כל שורה מחליפה גורם אחד בנתונים שלכם ומריצה את המודל מחדש – הפרש אמיתי, לא חלוקה מומצאת.</p>
+            <div class="receipt-empty" id="receipt-empty">הריצו הערכה כדי לקבל את הקבלה.</div>
+            <div class="receipt" id="receipt" hidden>
+              <div class="receipt-head"><span id="receipt-car">—</span><span id="receipt-date"></span></div>
+              <div class="receipt-row receipt-base"><span>הערכת בסיס <small id="receipt-base-note"></small></span><span id="receipt-base-value">—</span></div>
+              <div class="receipt-items" id="receipt-items"></div>
+              <div class="receipt-divider"></div>
+              <div class="receipt-row receipt-total"><span>סה״כ משוער</span><span id="receipt-total">—</span></div>
+              <p class="receipt-note" id="receipt-note"></p>
+            </div>
+          </div>
+
+          <div class="whatif-card">
+            <div class="eyebrow">סימולטור מה-אם</div>
+            <h2>שנו את הנכס. הריצו שוב.</h2>
+            <p>שנו שטח, חדרים או שנת בנייה – כל שינוי מריץ מחדש את המודל האמיתי.</p>
+            <div class="whatif-sliders">
+              <div class="field"><label for="whatif-area">שטח <output id="whatif-area-value">90 מ״ר</output></label><input type="range" id="whatif-area" min="15" max="400" value="90"></div>
+              <div class="field"><label for="whatif-rooms">חדרים <output id="whatif-rooms-value">4</output></label><input type="range" id="whatif-rooms" min="1" max="8" step="0.5" value="4"></div>
+              <div class="field"><label for="whatif-year">שנת בנייה <output id="whatif-year-value">לא ידועה</output></label><input type="range" id="whatif-year" min="1900" max="2029" value="1995"></div>
+            </div>
+            <div class="whatif-values">
+              <div><small>נוכחי</small><strong id="whatif-current">—</strong></div>
+              <div class="arrow">→</div>
+              <div><small>תרחיש</small><strong id="whatif-new">—</strong></div>
+            </div>
+            <p class="scenario-note" id="whatif-delta">הריצו הערכה ואז נסו תרחישים שונים.</p>
+          </div>
+
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== 05: the data at a glance ===================== -->
+    <section class="section dashboard" id="dashboard">
+      <div class="container">
+        <div class="section-head">
+          <div>
+            <div class="eyebrow">05 / שוק הנדל״ן</div>
+            <h2>הנתונים במבט אחד.</h2>
+          </div>
+          <p>סטטיסטיקות מתוך הנתונים והמודל שנשלחים עם האתר.</p>
+        </div>
+        <div class="stat-grid">
+          <div><strong id="dash-deals">—</strong><span>עסקאות</span></div>
+          <div><strong id="dash-parcels">—</strong><span>חלקות ממופות</span></div>
+          <div><strong id="dash-schools">—</strong><span>מוסדות לימוד</span></div>
+          <div><strong id="dash-transit">—</strong><span>תחנות תחבורה</span></div>
+          <div><strong id="dash-r2">—</strong><span>R² במבחן</span></div>
+          <div><strong id="dash-ape">—</strong><span>חציון סטייה</span></div>
+        </div>
+        <div class="dashboard-grid">
+          <div class="data-card">
+            <h3>עד כמה המודל מדויק?</h3>
+            <div id="accuracy-bars"></div>
+            <p class="note">נמדד על עסקאות שהמודל לא ראה באימון.</p>
+          </div>
+          <div class="data-card">
+            <h3>אותו נכס, לפי סוג נכס</h3>
+            <div id="nature-bars"><p class="note">הריצו הערכה כדי לראות השוואה בין סוגי נכסים במיקום שבחרתם.</p></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== 06: about the model ===================== -->
+    <section class="section about-section" id="about">
+      <div class="container">
+        <div class="section-head">
+          <div>
+            <div class="eyebrow">06 / המודל</div>
+            <h2>שקוף מהיסוד.</h2>
+          </div>
+          <p>אלה נתוני המודל האמיתי שרץ באתר – בלי הגזמות בדיוק.</p>
+        </div>
+        <div class="model-grid">
+          <div class="model-col">
+            <div class="model-card">
+              <div class="model-stat"><strong id="stat-r2">—</strong><span>R² על מחיר</span></div>
+              <div class="model-stat"><strong id="stat-mae">—</strong><span>סטיית ממוצע (MAE)</span></div>
+              <div class="model-stat"><strong id="stat-rmse">—</strong><span>RMSE</span></div>
+              <div class="model-stat"><strong id="stat-rows">—</strong><span>עסקאות אימון</span></div>
+              <div class="model-stat trained"><strong id="stat-trained">—</strong><span>תאריך אימון</span></div>
+            </div>
+            <div class="importance-card">
+              <h3>חשיבות גורמים</h3>
+              <p id="importance-method">—</p>
+              <div id="importance-bars"></div>
+            </div>
+          </div>
+          <div class="architecture">
+            <h3>מבנה המודל</h3>
+            <div class="layer"><b>קלט</b><span id="stat-features">—</span> מאפיינים</div>
+            <div class="layer"><b>מודל</b><span id="stat-trees">—</span> עצי החלטה (Gradient Boosting) לחציון</div>
+            <div class="layer"><b>טווח</b>שני מודלים נוספים לאחוזון <span id="stat-lo">10</span> ו-<span id="stat-hi">90</span></div>
+            <div class="layer"><b>פלט</b>לוג מחיר למ״ר, מוכפל בשטח</div>
+            <p>המחיר המוצג הוא חיזוי החציון, והטווח מגיע משני מודלי האחוזונים. המודל מנבא את לוגריתם המחיר למ״ר, ולכן הטעויות נמדדות באחוזים ולא בשקלים.</p>
+            <p>המדדים חושבו על עסקאות שהוחזקו בצד ולא שימשו לאימון.</p>
+          </div>
+        </div>
+        <div class="disclaimer">ההערכות הן סטטיסטיות ואינן שמאות מקצועית. המודל לא מכיר את מצב הנכס, הקומה, החניה, הנוף, השיפוצים או מצב השוק העתידי.</div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="container">
+      <strong>RealPrice</strong>
+      <span>סטטי · רץ בדפדפן · שוק הנדל״ן בישראל</span>
+      <span>הערכות בלבד – לא שמאות.</span>
     </div>
-    <div class="step-nav"><button type="button" class="btn btn-ghost step-back" data-goto="1"><span>←</span> חזרה</button><button type="button" class="btn btn-primary step-next" data-goto="3">הבא: העסקה <span>→</span></button></div>
-  </div>
+  </footer>
 
-  <div class="form-step" data-step="3">
-    <div class="field-group no-border"><div class="field-group-label">סוג העסקה</div>
-      <div class="field-row two"><div class="field"><label for="f-nature">סוג נכס</label><select id="f-nature"></select></div><div class="field"><label for="f-date">תאריך עסקה</label><input type="date" id="f-date"></div></div>
-    </div>
-    <div class="asking-wrap"><label for="f-asking">מחיר מבוקש <span>לא חובה – מפעיל ציון עסקה</span></label><div class="asking-input"><span>₪</span><input id="f-asking" type="number" min="0" step="10000" placeholder="לדוגמה: 2,350,000"><span>המוכר מבקש</span></div></div>
-    <div class="step-nav"><button type="button" class="btn btn-ghost step-back" data-goto="2"><span>←</span> חזרה</button><button type="submit" class="btn btn-primary calc-submit"><span id="submit-label">חשבו שווי שוק</span> <span>→</span></button></div>
-  </div>
-</div>
-
-<div id="load-status" class="error-state" role="status"></div></form>
-
-<aside class="result-panel" aria-live="polite"><div class="result-top"><span class="result-label">שווי שוק משוער</span><span class="live-dot" id="live-dot">טוען מודל…</span></div><div class="price-wrap"><span>₪</span><strong id="price-value">—</strong></div><div class="range-label">טווח שוק משוער</div><div class="price-range"><strong id="range-low">—</strong><span>—</span><strong id="range-high">—</strong></div><p class="range-note" id="range-note">זהו טווח משוער ולא התחייבות או שמאות.</p>
-<div class="deal-card" id="deal-card" hidden><div><div class="mini-label">ציון עסקה</div><strong id="deal-score">—</strong><span id="deal-label">—</span></div><div class="deal-bar"><i id="deal-fill"></i></div><p id="deal-explain"></p></div>
-<div class="coverage" id="coverage"><div class="coverage-head"><span>אמינות ההערכה</span><strong id="coverage-level">—</strong></div><div class="coverage-track"><i id="coverage-fill"></i></div><p id="coverage-text">מבוססת על רוחב הטווח ועל דיוק המיקום שנבחר.</p></div></aside>
-</div></div></section>
-
-<section class="section" id="surroundings"><div class="container"><div class="section-head"><div><div class="eyebrow">02 / סביבה</div><h2>מה יש ליד הנכס?</h2></div><p>המרחק למוסד הלימוד ולתחנה הקרובים ביותר, ולמרכז תל אביב – גורמים שהמודל לוקח בחשבון.</p></div>
-<div class="stat-grid three" id="near-grid"><div><strong>—</strong><span>בחרו מיקום והריצו הערכה</span></div><div><strong>—</strong><span></span></div><div><strong>—</strong><span></span></div></div></div></section>
-
-<section class="section market-section" id="market"><div class="container"><div class="section-head"><div><div class="eyebrow">03 / מיקום בשוק</div><h2>איפה הנכס שלכם עומד?</h2></div><p id="market-summary">השוואה של אותו נכס בנקודות שונות באזור, לפי המודל.</p></div><div class="position-card"><div class="position-copy"><div class="big-percent"><span id="percentile">—</span><small>%</small></div><h3 id="position-title">הריצו הערכה</h3><p id="position-text">כאן יופיע המיקום של הנכס ביחס לסביבתו.</p><div class="position-line"><span>0%</span><div><i id="position-marker"></i></div><span>100%</span></div><div class="position-caption"><span>זול יותר</span><strong id="position-scope">אזור</strong><span>יקר יותר</span></div></div><div class="chart-panel"><div class="chart-toolbar"><div class="axis-toggle" role="group" aria-label="ציר"><button type="button" class="active" data-axis="area">מחיר × שטח</button><button type="button" data-axis="year">מחיר × שנת בנייה</button></div><div class="legend"><span><i class="band-key"></i> טווח</span><span><i></i> עקום המודל</span><span><i class="you-dot"></i> הנכס שלכם</span></div></div><svg id="curve-svg" role="img" aria-label="עקום המחיר לפי המודל"></svg><p class="chart-note">העקום מחושב מהמודל על הנכס שלכם בעת שינוי פרמטר אחד – לא עסקאות בפועל.</p></div></div></div></section>
-
-<section class="section" id="similar"><div class="container"><div class="section-head"><div><div class="eyebrow">04 / בסביבה</div><h2>אותו נכס, במקום אחר.</h2></div><p>הערכת המודל לאותו נכס בדיוק, במרחק קצר לכל כיוון – כדי לראות כמה המיקום משפיע.</p></div><div class="similar-grid four" id="similar-grid"><div class="empty-card">הריצו הערכה כדי לראות השוואה לאזור.</div></div></div></section>
-
-<section class="section insight-section"><div class="container"><div class="insight-grid">
-<div class="insight-card" id="receipt-card">
-  <div class="eyebrow">למה המחיר הזה?</div>
-  <h2>מה עומד מאחורי המספר.</h2>
-  <p>נקודת ההתחלה היא דירה טיפוסית במרכז תל אביב. כל שורה מחליפה גורם אחד בנתונים שלכם ומריצה את המודל מחדש – הפרש אמיתי, לא חלוקה מומצאת.</p>
-  <div class="receipt-empty" id="receipt-empty">הריצו הערכה כדי לקבל את הקבלה.</div>
-  <div class="receipt" id="receipt" hidden>
-    <div class="receipt-head"><span id="receipt-car">—</span><span id="receipt-date"></span></div>
-    <div class="receipt-row receipt-base"><span>הערכת בסיס <small id="receipt-base-note"></small></span><span id="receipt-base-value">—</span></div>
-    <div class="receipt-items" id="receipt-items"></div>
-    <div class="receipt-divider"></div>
-    <div class="receipt-row receipt-total"><span>סה״כ משוער</span><span id="receipt-total">—</span></div>
-    <p class="receipt-note" id="receipt-note"></p>
-  </div>
-</div>
-
-<div class="whatif-card">
-  <div class="eyebrow">סימולטור מה-אם</div>
-  <h2>שנו את הנכס. הריצו שוב.</h2>
-  <p>שנו שטח, חדרים או שנת בנייה – כל שינוי מריץ מחדש את המודל האמיתי.</p>
-  <div class="whatif-sliders">
-    <div class="field"><label for="whatif-area">שטח <output id="whatif-area-value">90 מ״ר</output></label><input type="range" id="whatif-area" min="15" max="400" value="90"></div>
-    <div class="field"><label for="whatif-rooms">חדרים <output id="whatif-rooms-value">4</output></label><input type="range" id="whatif-rooms" min="1" max="8" step="0.5" value="4"></div>
-    <div class="field"><label for="whatif-year">שנת בנייה <output id="whatif-year-value">לא ידועה</output></label><input type="range" id="whatif-year" min="1900" max="2029" value="1995"></div>
-  </div>
-  <div class="whatif-values"><div><small>נוכחי</small><strong id="whatif-current">—</strong></div><div class="arrow">→</div><div><small>תרחיש</small><strong id="whatif-new">—</strong></div></div>
-  <p class="scenario-note" id="whatif-delta">הריצו הערכה ואז נסו תרחישים שונים.</p>
-</div>
-</div></div></section>
-
-<section class="section dashboard" id="dashboard"><div class="container"><div class="section-head"><div><div class="eyebrow">05 / שוק הנדל״ן</div><h2>הנתונים במבט אחד.</h2></div><p>סטטיסטיקות מתוך הנתונים והמודל שנשלחים עם האתר.</p></div>
-<div class="stat-grid"><div><strong id="dash-deals">—</strong><span>עסקאות</span></div><div><strong id="dash-parcels">—</strong><span>חלקות ממופות</span></div><div><strong id="dash-schools">—</strong><span>מוסדות לימוד</span></div><div><strong id="dash-transit">—</strong><span>תחנות תחבורה</span></div><div><strong id="dash-r2">—</strong><span>R² במבחן</span></div><div><strong id="dash-ape">—</strong><span>חציון סטייה</span></div></div>
-<div class="dashboard-grid"><div class="data-card"><h3>עד כמה המודל מדויק?</h3><div id="accuracy-bars"></div><p class="note">נמדד על עסקאות שהמודל לא ראה באימון.</p></div><div class="data-card"><h3>אותו נכס, לפי סוג נכס</h3><div id="nature-bars"><p class="note">הריצו הערכה כדי לראות השוואה בין סוגי נכסים במיקום שבחרתם.</p></div></div></div></div></section>
-
-<section class="section about-section" id="about"><div class="container"><div class="section-head"><div><div class="eyebrow">06 / המודל</div><h2>שקוף מהיסוד.</h2></div><p>אלה נתוני המודל האמיתי שרץ באתר – בלי הגזמות בדיוק.</p></div><div class="model-grid">
-<div class="model-col">
-<div class="model-card"><div class="model-stat"><strong id="stat-r2">—</strong><span>R² על מחיר</span></div><div class="model-stat"><strong id="stat-mae">—</strong><span>סטיית ממוצע (MAE)</span></div><div class="model-stat"><strong id="stat-rmse">—</strong><span>RMSE</span></div><div class="model-stat"><strong id="stat-rows">—</strong><span>עסקאות אימון</span></div><div class="model-stat trained"><strong id="stat-trained">—</strong><span>תאריך אימון</span></div></div>
-<div class="importance-card"><h3>חשיבות גורמים</h3><p id="importance-method">—</p><div id="importance-bars"></div></div>
-</div>
-<div class="architecture"><h3>מבנה המודל</h3><div class="layer"><b>קלט</b><span id="stat-features">—</span> מאפיינים</div><div class="layer"><b>מודל</b><span id="stat-trees">—</span> עצי החלטה (Gradient Boosting) לחציון</div><div class="layer"><b>טווח</b>שני מודלים נוספים לאחוזון <span id="stat-lo">10</span> ו-<span id="stat-hi">90</span></div><div class="layer"><b>פלט</b>לוג מחיר למ״ר, מוכפל בשטח</div><p>המחיר המוצג הוא חיזוי החציון, והטווח מגיע משני מודלי האחוזונים. המודל מנבא את לוגריתם המחיר למ״ר, ולכן הטעויות נמדדות באחוזים ולא בשקלים.</p><p>המדדים חושבו על עסקאות שהוחזקו בצד ולא שימשו לאימון.</p></div></div><div class="disclaimer">ההערכות הן סטטיסטיות ואינן שמאות מקצועית. המודל לא מכיר את מצב הנכס, הקומה, החניה, הנוף, השיפוצים או מצב השוק העתידי.</div></div></section>
-</main>
-<footer><div class="container"><strong>RealPrice</strong><span>סטטי · רץ בדפדפן · שוק הנדל״ן בישראל</span><span>הערכות בלבד – לא שמאות.</span></div></footer>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="js/common.js"></script>
-<script src="data/meta.js"></script>
-<script src="data/poi.js"></script>
-<script src="data/model.js"></script>
-<script src="js/picker.js"></script>
-<script src="js/predictor.js"></script>
-<script src="js/chart.js"></script>
-<script src="js/app.js"></script>
+  <!-- Scripts. The order matters: every file may use the ones above it. -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="js/common.js"></script>      <!-- formatting, distances, spatial index, parcels, map -->
+  <script src="data/meta.js"></script>      <!-- generated by the pipeline (step 7): settings and headline numbers -->
+  <script src="data/poi.js"></script>       <!-- generated: schools and bus stops -->
+  <script src="data/model.js"></script>     <!-- generated (step 6): the trained model -->
+  <script src="js/picker.js"></script>      <!-- location picker -->
+  <script src="js/predictor.js"></script>   <!-- runs the model -->
+  <script src="js/chart.js"></script>       <!-- price-curve chart -->
+  <script src="js/analysis.js"></script>    <!-- deal score, receipt, price curves ... -->
+  <script src="js/app.js"></script>         <!-- the page itself -->
 </body>
 </html>

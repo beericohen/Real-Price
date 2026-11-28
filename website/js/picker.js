@@ -1,57 +1,76 @@
-/* Location picker (step 1): tab 1 = gush / chelka / sub-chelka, tab 2 = free-text address. Styled like the Auto-Price form. */
+/* Location picker (step 1 of the form). Two tabs: "gush / chelka" and "address".
+   The markup is in index.html (inside <div id="picker">); this file only adds the behaviour. */
 (function () {
-  RP.createPicker = (root, onLocate) => {
-    root.innerHTML = `
-      <div class="axis-toggle wide" role="tablist">
-        <button type="button" role="tab" class="active" data-tab="parcel">גוש / חלקה</button>
-        <button type="button" role="tab" data-tab="address">כתובת</button>
-      </div>
-      <div data-form="parcel">
-        <div class="field-row three">
-          <div class="field"><label for="p-gush">גוש</label><input id="p-gush" type="number" min="1" inputmode="numeric"></div>
-          <div class="field"><label for="p-chelka">חלקה</label><input id="p-chelka" type="number" min="1" inputmode="numeric"></div>
-          <div class="field"><label for="p-sub">תת-חלקה</label><input id="p-sub" type="number" min="0" inputmode="numeric" placeholder="לא חובה"></div>
-        </div>
-      </div>
-      <div data-form="address" hidden>
-        <div class="field"><label for="p-address">כתובת (רחוב, מספר, עיר)</label><input id="p-address" type="text" autocomplete="street-address" placeholder="לדוגמה: דיזנגוף 50 תל אביב"></div>
-      </div>
-      <button type="button" class="btn btn-primary picker-btn" id="p-go">אתר על המפה</button>
-      <p class="picker-status" role="status" aria-live="polite"></p>`;
-    const status = root.querySelector(".picker-status");
-    const say = (msg, error = false) => { status.textContent = msg; status.classList.toggle("error", error); };
-    const val = (id) => root.querySelector("#" + id).value.trim();
-    let tab = "parcel";
+  /**
+   * @param root      the #picker element
+   * @param onLocate  called with {lat, lon, label, exact} when a location was found
+   * @returns         {say(message, isError)} - shows a status line under the form
+   */
+  RP.initPicker = (root, onLocate) => {
+    const statusLine = root.querySelector(".picker-status");
+    const tabButtons = root.querySelectorAll("[data-tab]");
+    const tabForms = root.querySelectorAll("[data-form]");
+    let currentTab = "parcel";
 
-    root.querySelectorAll("[data-tab]").forEach((btn) => btn.addEventListener("click", () => {
-      tab = btn.dataset.tab;
-      root.querySelectorAll("[data-tab]").forEach((b) => b.classList.toggle("active", b === btn));
-      root.querySelectorAll("[data-form]").forEach((f) => (f.hidden = f.dataset.form !== tab));
-      say("");
-    }));
+    function say(message, isError = false) {
+      statusLine.textContent = message;
+      statusLine.classList.toggle("error", isError);
+    }
+    const value = (id) => root.querySelector("#" + id).value.trim();
 
-    const handlers = {
-      parcel: async () => {
-        const gush = +val("p-gush"), chelka = +val("p-chelka"), sub = val("p-sub");
-        if (!gush || !chelka) return say("הזינו גוש וחלקה.", true);
-        const hit = await RP.findParcel(gush, chelka);
-        if (!hit) return say(`גוש ${gush} לא נמצא במאגר.`, true);
-        say(hit.exact ? "" : `חלקה ${chelka} לא נמצאה - מוצג מרכז גוש ${gush}.`);
-        onLocate({ lat: hit.lat, lon: hit.lon, label: `גוש ${gush} חלקה ${chelka}` + (sub ? ` / ${sub}` : ""), exact: hit.exact });
-      },
-      address: async () => {
-        if (!val("p-address")) return say("הזינו כתובת.", true);
-        const hit = await RP.geocode(val("p-address"));
-        if (!hit) return say("הכתובת לא נמצאה, נסו לדייק (רחוב, מספר, עיר).", true);
-        onLocate({ lat: hit.lat, lon: hit.lon, label: hit.label, exact: true });
-      },
-    };
-    const run = async () => {
+    // ---- switching between the two tabs
+    tabButtons.forEach((button) =>
+      button.addEventListener("click", () => {
+        currentTab = button.dataset.tab;
+        tabButtons.forEach((b) => b.classList.toggle("active", b === button));
+        tabForms.forEach((form) => (form.hidden = form.dataset.form !== currentTab));
+        say("");
+      })
+    );
+
+    // ---- one search function per tab
+    async function searchParcel() {
+      const gush = +value("p-gush");
+      const chelka = +value("p-chelka");
+      const subChelka = value("p-sub"); // optional, only shown in the label
+      if (!gush || !chelka) return say("הזינו גוש וחלקה.", true);
+
+      const hit = await RP.findParcel(gush, chelka);
+      if (!hit) return say(`גוש ${gush} לא נמצא במאגר.`, true);
+
+      say(hit.exact ? "" : `חלקה ${chelka} לא נמצאה - מוצג מרכז גוש ${gush}.`);
+      const label = `גוש ${gush} חלקה ${chelka}` + (subChelka ? ` / ${subChelka}` : "");
+      onLocate({ lat: hit.lat, lon: hit.lon, label, exact: hit.exact });
+    }
+
+    async function searchAddress() {
+      const address = value("p-address");
+      if (!address) return say("הזינו כתובת.", true);
+
+      const hit = await RP.geocode(address);
+      if (!hit) return say("הכתובת לא נמצאה, נסו לדייק (רחוב, מספר, עיר).", true);
+      onLocate({ lat: hit.lat, lon: hit.lon, label: hit.label, exact: true });
+    }
+
+    async function search() {
       say("מחפש...");
-      try { await handlers[tab](); } catch (err) { say("החיפוש נכשל - בדקו את החיבור לאינטרנט ונסו שוב.", true); }
-    };
-    root.querySelector("#p-go").addEventListener("click", run);
-    root.querySelectorAll("input").forEach((i) => i.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); run(); } }));
+      try {
+        await (currentTab === "parcel" ? searchParcel() : searchAddress());
+      } catch (error) {
+        say("החיפוש נכשל - בדקו את החיבור לאינטרנט ונסו שוב.", true);
+      }
+    }
+
+    root.querySelector("#p-go").addEventListener("click", search);
+    root.querySelectorAll("input").forEach((input) =>
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault(); // do not submit the big form behind the picker
+          search();
+        }
+      })
+    );
+
     return { say };
   };
 })();
